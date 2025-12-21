@@ -46,6 +46,18 @@ export function BingoPackPdf(props: {
           {bannerUrl ? <Image src={bannerUrl} style={styles.banner} /> : null}
 
           <View style={styles.titleRow}>
+            <Text>{props.packTitle  cards: { id: string; grid: BingoGrid }[];
+}) {
+  const bannerUrl = props.bannerUrl ?? "";
+  const logoUrl = props.logoUrl ?? "";
+
+  return (
+    <Document>
+      {props.cards.map((card) => (
+        <Page key={card.id} size="LETTER" style={styles.page}>
+          {bannerUrl ? <Image src={bannerUrl} style={styles.banner} /> : null}
+
+          <View style={styles.titleRow}>
             <Text>{props.packTitle}</Text>
             <Text>{props.sponsorName}</Text>
           </View>
