@@ -1,5 +1,3 @@
-// app/api/generate/route.ts
-
 import { NextResponse } from "next/server";
 import { createBingoPack } from "@/lib/bingo";
 import { renderBingoPackPdf, type BingoPack } from "@/pdf/BingoPackPdf";
@@ -14,7 +12,6 @@ function normalizeLines(text: unknown) {
 }
 
 function csvEscape(v: string) {
-  // Wrap in quotes and escape quotes
   return `"${v.replace(/"/g, '""')}"`;
 }
 
@@ -62,4 +59,49 @@ export async function POST(req: Request) {
     }
 
     // Create UNIQUE cards pack (core logic)
-    const generated = createBingoPack(items, qty
+    const generated = createBingoPack(items, qty);
+
+    // Convert to the PDF renderer's expected shape (center FREE is null)
+    const packForPdf: BingoPack = {
+      packTitle,
+      sponsorName,
+      bannerUrl,
+      logoUrl,
+      cards: generated.cards.map((c) => ({
+        id: c.id,
+        grid: c.grid.map((row) =>
+          row.map((cell) => (cell.text === "FREE" ? null : cell.text))
+        ),
+      })),
+    };
+
+    const pdfBuffer = await renderBingoPackPdf(packForPdf);
+    const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
+
+    // CSV roster: card id + items on that card
+    const csvLines: string[] = [];
+    csvLines.push(
+      ["card_id", "pack_title", "sponsor_name", "items_on_card"]
+        .map(csvEscape)
+        .join(",")
+    );
+
+    for (const card of packForPdf.cards) {
+      const flat = card.grid.flat().filter((x) => x !== null) as string[];
+      csvLines.push(
+        [card.id, packTitle, sponsorName, flat.join(" | ")]
+          .map(csvEscape)
+          .join(",")
+      );
+    }
+
+    const csv = csvLines.join("\n");
+
+    return NextResponse.json({ pdfBase64, csv });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || "Unknown server error" },
+      { status: 500 }
+    );
+  }
+}
