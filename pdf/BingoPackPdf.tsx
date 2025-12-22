@@ -1,6 +1,14 @@
 // pdf/BingoPackPdf.tsx
 import React from "react";
-import { Document, Page, Text, View, StyleSheet, pdf } from "@react-pdf/renderer";
+import {
+  Document,
+  Page,
+  Text,
+  View,
+  StyleSheet,
+  Image,
+  pdf,
+} from "@react-pdf/renderer";
 
 export type BingoGrid = string[][];
 export type BingoCard = { id: string; grid: BingoGrid };
@@ -14,51 +22,53 @@ export type BingoPack = {
 };
 
 const styles = StyleSheet.create({
-  page: { padding: 24, fontSize: 10, fontFamily: "Helvetica" },
-
+  page: { padding: 24, fontSize: 10 },
   headerWrap: { marginBottom: 10 },
   headerBar: {
-    backgroundColor: "#111",
-    borderRadius: 10,
-    padding: 10,
-    color: "#fff",
+    backgroundColor: "#000",
+    padding: 8,
+    borderRadius: 6,
   },
-  headerTitle: { fontSize: 16, fontWeight: "bold", marginBottom: 2 },
-  headerSub: { fontSize: 10, opacity: 0.9 },
-
-  metaRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
-  metaLeft: { fontSize: 9 },
-  metaRight: { fontSize: 9, opacity: 0.85 },
-
-  cardWrap: {
+  headerTitle: { color: "#fff", fontSize: 14, fontWeight: "bold" },
+  headerSponsor: { color: "#ddd", fontSize: 9 },
+  cardIdRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  grid: {
     borderWidth: 1,
-    borderColor: "#222",
-    borderRadius: 10,
-    overflow: "hidden",
+    borderColor: "#333",
   },
-
-  grid: { flexDirection: "column" },
-  row: { flexDirection: "row" },
+  row: {
+    flexDirection: "row",
+  },
   cell: {
-    width: "20%",
+    flex: 1,
     borderRightWidth: 1,
     borderBottomWidth: 1,
-    borderColor: "#222",
+    borderColor: "#333",
     alignItems: "center",
     justifyContent: "center",
-    padding: 6,
-    minHeight: 58,
+    height: 48,
+    padding: 2,
   },
-  lastCellInRow: { borderRightWidth: 0 },
-  lastRow: { borderBottomWidth: 0 },
-
-  cellText: { textAlign: "center" },
-
-  freeCell: { backgroundColor: "#111" },
-  freeTextTop: { color: "#fff", fontSize: 9, fontWeight: "bold" },
-  freeTextBottom: { color: "#fff", fontSize: 7, opacity: 0.9 },
-
-  footer: { marginTop: 10, fontSize: 8, opacity: 0.8 },
+  cellText: {
+    textAlign: "center",
+    fontSize: 9,
+  },
+  freeCell: {
+    backgroundColor: "#000",
+  },
+  freeText: {
+    color: "#fff",
+    fontWeight: "bold",
+  },
+  footer: {
+    marginTop: 6,
+    fontSize: 8,
+    color: "#555",
+  },
 });
 
 function BingoPackDoc({ pack }: { pack: BingoPack }) {
@@ -69,57 +79,50 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
           <View style={styles.headerWrap}>
             <View style={styles.headerBar}>
               <Text style={styles.headerTitle}>{pack.packTitle}</Text>
-              <Text style={styles.headerSub}>Sponsor: {pack.sponsorName}</Text>
+              <Text style={styles.headerSponsor}>
+                Sponsor: {pack.sponsorName}
+              </Text>
             </View>
           </View>
 
-          <View style={styles.metaRow}>
-            <Text style={styles.metaLeft}>Card ID: {card.id}</Text>
-            <Text style={styles.metaRight}>5×5 • Center is FREE</Text>
+          <View style={styles.cardIdRow}>
+            <Text>Card ID: {card.id}</Text>
+            <Text>5×5 • Center is FREE</Text>
           </View>
 
-          <View style={styles.cardWrap}>
-            <View style={styles.grid}>
-              {card.grid.map((row, rIdx) => (
-                <View key={rIdx} style={styles.row}>
-                  {row.map((cell, cIdx) => {
-                    const isCenter = rIdx === 2 && cIdx === 2;
-                    const isLastCell = cIdx === 4;
-                    const isLastRow = rIdx === 4;
-
-                    // Ensure the PDF only ever gets STRINGS (prevents [object Object])
-                    const cellText = typeof cell === "string" ? cell : String(cell ?? "");
-
-                    // ✅ NO nulls in style array (react-pdf typing hates null)
-                    const cellStyle = [
-                      styles.cell,
-                      ...(isLastCell ? [styles.lastCellInRow] : []),
-                      ...(isLastRow ? [styles.lastRow] : []),
-                      ...(isCenter ? [styles.freeCell] : []),
-                    ];
-
-                    return (
-                      <View key={cIdx} style={cellStyle}>
-                        {isCenter ? (
-                          <>
-                            <Text style={styles.freeTextTop}>
-                              {pack.sponsorName.toUpperCase()}
-                            </Text>
-                            <Text style={styles.freeTextBottom}>FREE</Text>
-                          </>
-                        ) : (
-                          <Text style={styles.cellText}>{cellText}</Text>
-                        )}
-                      </View>
-                    );
-                  })}
-                </View>
-              ))}
-            </View>
+          <View style={styles.grid}>
+            {card.grid.map((row, rIdx) => (
+              <View key={rIdx} style={styles.row}>
+                {row.map((cell, cIdx) => {
+                  const isFree = cell === "FREE";
+                  return (
+                    <View
+                      key={cIdx}
+                      style={[
+                        styles.cell,
+                        cIdx === 4 ? undefined : {},
+                        rIdx === 4 ? undefined : {},
+                        isFree ? styles.freeCell : undefined,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.cellText,
+                          isFree ? styles.freeText : undefined,
+                        ]}
+                      >
+                        {isFree ? `${pack.sponsorName}\nFREE` : cell}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
           </View>
 
           <Text style={styles.footer}>
-            Verification: Screenshot your card with your Card ID visible when you claim bingo.
+            Verification: Screenshot your card with Card ID visible when you
+            claim bingo.
           </Text>
         </Page>
       ))}
@@ -127,9 +130,15 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
   );
 }
 
-export async function renderBingoPackPdf(pack: BingoPack) {
+/**
+ * ✅ THIS IS THE KEY
+ * We explicitly return a Buffer — nothing else
+ */
+export async function renderBingoPackPdf(
+  pack: BingoPack
+): Promise<Buffer> {
   const doc = <BingoPackDoc pack={pack} />;
   const instance = pdf(doc);
-  const buf = await instance.toBuffer();
-  return buf;
+  const buffer = await instance.toBuffer();
+  return buffer;
 }
