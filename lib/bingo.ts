@@ -1,6 +1,30 @@
 // lib/bingo.ts
-export type BingoGrid = string[][];
+
+export type BingoCell = string;
+export type BingoGrid = BingoCell[][];
 export type BingoCard = { id: string; grid: BingoGrid };
+
+export type BingoPack = {
+  packTitle: string;
+  sponsorName: string;
+  bannerUrl?: string;
+  logoUrl?: string;
+  cards: BingoCard[];
+};
+
+export function normalizeLines(input: unknown): string[] {
+  const text = String(input ?? "");
+  // Handles \n, \r\n, old Mac \r, plus mobile unicode line separators
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u2028|\u2029|\u0085/g, "\n");
+
+  return normalized
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 function mulberry32(seed: number) {
   return function () {
@@ -11,25 +35,27 @@ function mulberry32(seed: number) {
   };
 }
 
-function shuffle<T>(arr: T[], rand = Math.random) {
-  const a = [...arr];
+function shuffle<T>(arr: T[], rnd = Math.random): T[] {
+  const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
+    const j = Math.floor(rnd() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
 }
 
 export function makeCardId(): string {
-  // short-ish, human readable
-  const part = Math.random().toString(36).slice(2, 6).toUpperCase();
-  const part2 = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `${part}-${part2}`;
+  // short-ish readable id
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 8; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return out.slice(0, 4) + "-" + out.slice(4);
 }
 
-export function generateGrid(items: string[], rand = Math.random): BingoGrid {
+export function generateGrid(items: string[], rnd = Math.random): BingoGrid {
   if (items.length < 24) throw new Error("Need at least 24 items.");
-  const picked = shuffle(items, rand).slice(0, 24);
+
+  const picked = shuffle(items, rnd).slice(0, 24);
 
   const grid: BingoGrid = [];
   let k = 0;
@@ -44,43 +70,29 @@ export function generateGrid(items: string[], rand = Math.random): BingoGrid {
   return grid;
 }
 
-function gridKey(grid: BingoGrid): string {
-  // stable fingerprint for uniqueness
-  return grid.flat().join("|");
-}
+export function createBingoPackUnique(opts: {
+  items: string[];
+  qty: number;
+  seed?: number;
+  maxAttempts?: number;
+}): { cards: { id: string; grid: BingoGrid }[]; uniqueCount: number } {
+  const qty = Math.max(1, Math.min(500, Math.floor(opts.qty)));
+  const attempts = Math.max(1000, opts.maxAttempts ?? 20000);
 
-export function createBingoPackUnique(
-  items: string[],
-  quantity: number,
-  seed?: number
-): { cards: BingoCard[] } {
-  if (quantity < 1 || quantity > 500) throw new Error("Quantity must be between 1 and 500.");
-  if (items.length < 24) throw new Error("Need at least 24 items.");
+  const rnd = opts.seed != null ? mulberry32(opts.seed) : Math.random;
 
-  const rand = seed != null ? mulberry32(seed) : Math.random;
-
-  const cards: BingoCard[] = [];
   const seen = new Set<string>();
+  const cards: { id: string; grid: BingoGrid }[] = [];
 
-  // safeguard to avoid infinite loops if item pool is too small for requested uniqueness
-  const maxAttempts = Math.max(2000, quantity * 200);
-
-  let attempts = 0;
-  while (cards.length < quantity) {
-    attempts++;
-    if (attempts > maxAttempts) {
-      throw new Error(
-        `Could not generate ${quantity} unique cards with the current item pool. Add more items or lower quantity.`
-      );
-    }
-
-    const grid = generateGrid(items, rand);
-    const key = gridKey(grid);
-    if (seen.has(key)) continue;
-
-    seen.add(key);
+  let tries = 0;
+  while (cards.length < qty && tries < attempts) {
+    tries++;
+    const grid = generateGrid(opts.items, rnd);
+    const sig = grid.flat().join("|"); // includes FREE in the center
+    if (seen.has(sig)) continue;
+    seen.add(sig);
     cards.push({ id: makeCardId(), grid });
   }
 
-  return { cards };
+  return { cards, uniqueCount: cards.length };
 }
