@@ -5,15 +5,15 @@ import { useEffect, useMemo, useState } from "react";
 type GeneratedPack = {
   packTitle: string;
   sponsorName: string;
-  pdfBase64: string; // base64 string (no data: prefix expected)
-  csv: string; // raw CSV text
+  pdfBase64: string; // base64 (no data: prefix)
+  csv: string;
   createdAt: number;
   requestKey: string;
 };
 
 type SponsorSkin = {
   id: string; // local-only id
-  label: string; // "Joe's Grows", "Sponsor X"
+  label: string; // e.g. "Joe's Grows"
   bannerUrl: string;
   logoUrl: string;
 };
@@ -26,7 +26,7 @@ type FormState = {
   sponsorName: string;
   bannerUrl: string;
   logoUrl: string;
-  qty: string; // keep as string to avoid mobile empty input issues
+  qty: string; // ALWAYS string
   items: string;
   selectedSkinId: string;
   newSkinLabel: string;
@@ -52,9 +52,7 @@ function safeFileName(s: string) {
 }
 
 function makeLocalId() {
-  return (
-    Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36)
-  );
+  return Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
 }
 
 function normalizeLines(text: string) {
@@ -72,15 +70,7 @@ function buildRequestKey(payload: {
   qty: number;
   items: string[];
 }) {
-  // stable-ish key used to prevent mismatched PDF/CSV
-  return JSON.stringify({
-    packTitle: payload.packTitle,
-    sponsorName: payload.sponsorName,
-    bannerUrl: payload.bannerUrl,
-    logoUrl: payload.logoUrl,
-    qty: payload.qty,
-    items: payload.items,
-  });
+  return JSON.stringify(payload);
 }
 
 async function safeJsonFetch(input: RequestInfo, init?: RequestInit) {
@@ -91,66 +81,28 @@ async function safeJsonFetch(input: RequestInfo, init?: RequestInit) {
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error(
-      text || `Server returned an empty / non-JSON response (HTTP ${res.status}).`
-    );
+    throw new Error(text || `Server returned an empty response (HTTP ${res.status}).`);
   }
 
   if (!res.ok) {
-    throw new Error(
-      data?.error || data?.message || `Request failed (HTTP ${res.status}).`
-    );
+    throw new Error(data?.error || data?.message || `Request failed (HTTP ${res.status}).`);
   }
 
   return data;
 }
 
 export default function HomePage() {
-  // Defaults
   const [packTitle, setPackTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
   const [bannerUrl, setBannerUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
-
-  // IMPORTANT: qty is string (mobile-safe)
   const [qty, setQty] = useState<string>("25");
-
-  // Default 25 test items included
-  const [items, setItems] = useState<string>(
-    [
-      "Trellis net",
-      "Lollipop",
-      "Defoliate",
-      "Stretch week",
-      "Dryback",
-      "Runoff EC",
-      "VPD off",
-      "Heat stress",
-      "Herm watch",
-      "Foxtails",
-      "Amber trichomes",
-      "Cloudy trichomes",
-      "Flush debate",
-      "Leaf taco",
-      "Stunted growth",
-      "Light burn",
-      "Cal-Mag",
-      "pH swing",
-      "Overwatered",
-      "Underwatered",
-      "Powdery mildew",
-      "Fungus gnats",
-      "Bud rot",
-      "Nute lockout",
-      "Late flower fade",
-    ].join("\n")
-  );
+  const [items, setItems] = useState<string>("");
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pack, setPack] = useState<GeneratedPack | null>(null);
 
-  // Sponsor skins
   const [skins, setSkins] = useState<SponsorSkin[]>([]);
   const [selectedSkinId, setSelectedSkinId] = useState<string>("");
   const [newSkinLabel, setNewSkinLabel] = useState<string>("");
@@ -162,39 +114,36 @@ export default function HomePage() {
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) setSkins(parsed);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
   // Persist skins
   useEffect(() => {
     try {
       localStorage.setItem(SKINS_KEY, JSON.stringify(skins));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [skins]);
 
-  // Load form
+  // Load form (and coerce old qty types)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(FORM_KEY);
       if (!raw) return;
-      const f: Partial<FormState> = JSON.parse(raw);
+      const f: Partial<FormState> & { qty?: any } = JSON.parse(raw);
 
       if (typeof f.packTitle === "string") setPackTitle(f.packTitle);
       if (typeof f.sponsorName === "string") setSponsorName(f.sponsorName);
       if (typeof f.bannerUrl === "string") setBannerUrl(f.bannerUrl);
       if (typeof f.logoUrl === "string") setLogoUrl(f.logoUrl);
+
+      // IMPORTANT: qty might be saved as number from older builds
       if (typeof f.qty === "string") setQty(f.qty);
+      if (typeof f.qty === "number") setQty(String(f.qty));
+
       if (typeof f.items === "string") setItems(f.items);
       if (typeof f.selectedSkinId === "string") setSelectedSkinId(f.selectedSkinId);
       if (typeof f.newSkinLabel === "string") setNewSkinLabel(f.newSkinLabel);
-    } catch {
-      // ignore
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    } catch {}
   }, []);
 
   // Persist form
@@ -211,17 +160,13 @@ export default function HomePage() {
         newSkinLabel,
       };
       localStorage.setItem(FORM_KEY, JSON.stringify(form));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items, selectedSkinId, newSkinLabel]);
 
   const itemsList = useMemo(() => normalizeLines(items), [items]);
-  const itemsCount = itemsList.length;
 
-  // current request key so we don't mismatch PDF/CSV
   const currentRequestKey = useMemo(() => {
-    const qtyNum = parseInt((qty || "").trim(), 10);
+    const qtyNum = Number(String(qty ?? "").trim());
     const safeQty = Number.isFinite(qtyNum) ? qtyNum : 0;
 
     return buildRequestKey({
@@ -240,7 +185,6 @@ export default function HomePage() {
     setSelectedSkinId(id);
     const skin = skins.find((s) => s.id === id);
     if (!skin) return;
-
     setSponsorName(skin.label);
     setBannerUrl(skin.bannerUrl);
     setLogoUrl(skin.logoUrl);
@@ -277,9 +221,10 @@ export default function HomePage() {
   function validateInputs(): { qtyNum: number; itemsArr: string[] } | null {
     setErr(null);
 
-    // ✅ Mobile-safe: parse here, NOT in onChange
-    const qtyNum = parseInt((qty || "").trim(), 10);
-    if (!Number.isFinite(qtyNum) || qtyNum < 1 || qtyNum > 500) {
+    const qtyStr = String(qty ?? "").trim();
+    const qtyNum = Number(qtyStr);
+
+    if (!Number.isFinite(qtyNum) || !Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > 500) {
       setErr("Quantity must be between 1 and 500.");
       return null;
     }
@@ -324,12 +269,8 @@ export default function HomePage() {
     const pdfBase64 = data?.pdfBase64;
     const csv = data?.csv;
 
-    if (typeof pdfBase64 !== "string" || !pdfBase64) {
-      throw new Error("Server did not return pdfBase64.");
-    }
-    if (typeof csv !== "string") {
-      throw new Error("Server did not return csv.");
-    }
+    if (typeof pdfBase64 !== "string" || !pdfBase64) throw new Error("Server did not return pdfBase64.");
+    if (typeof csv !== "string") throw new Error("Server did not return csv.");
 
     const newPack: GeneratedPack = {
       packTitle: payload.packTitle,
@@ -395,108 +336,67 @@ export default function HomePage() {
         maxWidth: 740,
         margin: "0 auto",
         padding: 16,
-        fontFamily:
-          "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 12 }}>
-        Grower Bingo Generator
-      </h1>
+      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}>Grower Bingo Generator</h1>
 
-      {/* Skin controls */}
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 12,
-          padding: 12,
-          marginBottom: 16,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            alignItems: "center",
-          }}
-        >
-          <div
+      <section style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <select
+            value={selectedSkinId}
+            onChange={(e) => applySkin(e.target.value)}
+            style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", minWidth: 220 }}
+          >
+            <option value="">Select a saved skin…</option>
+            {skins.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+
+          <input
+            value={newSkinLabel}
+            onChange={(e) => setNewSkinLabel(e.target.value)}
+            placeholder="Skin label (optional)"
+            style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", minWidth: 200 }}
+          />
+
+          <button
+            onClick={saveCurrentAsSkin}
+            disabled={busy}
             style={{
-              display: "flex",
-              gap: 8,
-              flexWrap: "wrap",
-              alignItems: "center",
-              flex: "1 1 auto",
+              padding: "10px 14px",
+              borderRadius: 999,
+              border: "1px solid #000",
+              background: "#000",
+              color: "#fff",
+              cursor: busy ? "not-allowed" : "pointer",
             }}
           >
-            <select
-              value={selectedSkinId}
-              onChange={(e) => applySkin(e.target.value)}
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                border: "1px solid #ccc",
-                minWidth: 220,
-              }}
-            >
-              <option value="">Select a saved skin…</option>
-              {skins.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
+            Save current as skin
+          </button>
 
-            <input
-              value={newSkinLabel}
-              onChange={(e) => setNewSkinLabel(e.target.value)}
-              placeholder="Skin label (optional)"
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                border: "1px solid #ccc",
-                minWidth: 200,
-              }}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              onClick={saveCurrentAsSkin}
-              disabled={busy}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 999,
-                border: "1px solid #000",
-                background: "#000",
-                color: "#fff",
-                cursor: busy ? "not-allowed" : "pointer",
-              }}
-            >
-              Save current as skin
-            </button>
-
-            <button
-              onClick={deleteSelectedSkin}
-              disabled={busy || !selectedSkinId}
-              style={{
-                padding: "10px 14px",
-                borderRadius: 999,
-                border: "1px solid #ccc",
-                background: "#fff",
-                cursor: busy || !selectedSkinId ? "not-allowed" : "pointer",
-              }}
-            >
-              Delete selected skin
-            </button>
-          </div>
+          <button
+            onClick={deleteSelectedSkin}
+            disabled={busy || !selectedSkinId}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 999,
+              border: "1px solid #ccc",
+              background: "#fff",
+              cursor: busy || !selectedSkinId ? "not-allowed" : "pointer",
+            }}
+          >
+            Delete selected skin
+          </button>
         </div>
       </section>
 
-      {/* Form */}
       <section style={{ display: "grid", gap: 12 }}>
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Pack title</span>
+          <span style={{ fontWeight: 600 }}>Pack title</span>
           <input
             value={packTitle}
             onChange={(e) => setPackTitle(e.target.value)}
@@ -505,7 +405,7 @@ export default function HomePage() {
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Sponsor name</span>
+          <span style={{ fontWeight: 600 }}>Sponsor name</span>
           <input
             value={sponsorName}
             onChange={(e) => setSponsorName(e.target.value)}
@@ -514,7 +414,7 @@ export default function HomePage() {
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Banner image URL (top banner)</span>
+          <span style={{ fontWeight: 600 }}>Banner image URL (top banner)</span>
           <input
             value={bannerUrl}
             onChange={(e) => setBannerUrl(e.target.value)}
@@ -524,9 +424,7 @@ export default function HomePage() {
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>
-            Sponsor logo URL (FREE center square)
-          </span>
+          <span style={{ fontWeight: 600 }}>Sponsor logo URL (FREE center square)</span>
           <input
             value={logoUrl}
             onChange={(e) => setLogoUrl(e.target.value)}
@@ -536,30 +434,19 @@ export default function HomePage() {
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Quantity (1–500)</span>
-
-          {/* ✅ FIXED: keep qty as string, do not Number() cast */}
+          <span style={{ fontWeight: 600 }}>Quantity (1–500)</span>
           <input
-            type="number"
             inputMode="numeric"
-            pattern="[0-9]*"
-            min={1}
-            max={500}
             value={qty}
-            onChange={(e) => setQty(e.target.value)}
-            style={{
-              padding: 12,
-              borderRadius: 12,
-              border: "1px solid #ccc",
-              width: 180,
-            }}
+            onChange={(e) => setQty(e.target.value)} // IMPORTANT: keep string
+            style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc", width: 180 }}
+            placeholder="25"
           />
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>
-            Square pool items (one per line — need 24+). Current:{" "}
-            <b>{itemsCount}</b>
+          <span style={{ fontWeight: 600 }}>
+            Square pool items (one per line — need 24+). Current: {itemsList.length}
           </span>
           <textarea
             value={items}
@@ -568,9 +455,10 @@ export default function HomePage() {
               padding: 12,
               borderRadius: 12,
               border: "1px solid #ccc",
-              minHeight: 240,
+              minHeight: 220,
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
             }}
+            placeholder={"Example:\nDeep Water Culture\npH swing\nCal-Mag\n..."}
           />
         </label>
 
@@ -580,16 +468,16 @@ export default function HomePage() {
           </div>
         ) : null}
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
           <button
             onClick={onGenerateAndDownloadPdf}
             disabled={busy}
             style={{
-              padding: "12px 16px",
-              borderRadius: 14,
-              border: "1px solid #000",
-              background: "#000",
-              color: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid #111",
+              background: "#111",
+              color: "white",
               cursor: busy ? "not-allowed" : "pointer",
             }}
           >
@@ -600,10 +488,11 @@ export default function HomePage() {
             onClick={onDownloadCsvRoster}
             disabled={busy}
             style={{
-              padding: "12px 16px",
-              borderRadius: 14,
-              border: "1px solid #ccc",
-              background: "#fff",
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: "1px solid #111",
+              background: "white",
+              color: "#111",
               cursor: busy ? "not-allowed" : "pointer",
             }}
           >
@@ -612,14 +501,8 @@ export default function HomePage() {
         </div>
 
         {pack ? (
-          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>
-            Last generated: <b>{pack.packTitle}</b> —{" "}
-            {new Date(pack.createdAt).toLocaleString()}
-            {!packIsFresh ? (
-              <span style={{ marginLeft: 8, color: "#b00020" }}>
-                (inputs changed — will re-generate)
-              </span>
-            ) : null}
+          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+            Last generated: <b>{pack.packTitle}</b> — {new Date(pack.createdAt).toLocaleString()}
           </div>
         ) : null}
       </section>
