@@ -1,11 +1,52 @@
-// app/api/generate/route.ts
 import { NextResponse } from "next/server";
-import { normalizeLines, createBingoPackUnique, type BingoPack } from "@/lib/bingo";
-import { renderBingoPackPdf } from "@/pdf/BingoPackPdf";
+import { createBingoPackUnique } from "@/lib/bingo";
+import { renderBingoPackPdf, type BingoPack } from "@/pdf/BingoPackPdf";
 
 export const runtime = "nodejs";
 
-function asString(v: unknown) {
+// Convert unknown input -> array of clean lines
+function normalizeLines(input: unknown): string[] {
+  const out: string[] = [];
+
+  const pushLine = (s: string) => {
+    const t = s.trim();
+    if (t) out.push(t);
+  };
+
+  const walk = (v: unknown) => {
+    if (v == null) return;
+
+    // If it's already a string, split by newlines
+    if (typeof v === "string") {
+      v.split(/\r?\n/g).forEach(pushLine);
+      return;
+    }
+
+    // If it's an array, walk each element (and split any multiline strings inside)
+    if (Array.isArray(v)) {
+      v.forEach(walk);
+      return;
+    }
+
+    // If it's an object, walk its values (handles weird state shapes)
+    if (typeof v === "object") {
+      for (const val of Object.values(v as Record<string, unknown>)) {
+        walk(val);
+      }
+      return;
+    }
+
+    // Fallback: coerce primitives
+    if (typeof v === "number" || typeof v === "boolean") {
+      pushLine(String(v));
+    }
+  };
+
+  walk(input);
+  return out;
+}
+
+function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
@@ -22,9 +63,9 @@ export async function POST(req: Request) {
     const logoUrl = logoUrlRaw.length ? logoUrlRaw : undefined;
 
     const qtyNum = Number(body.qty);
-    const qty = Number.isFinite(qtyNum) ? Math.max(1, Math.min(500, Math.floor(qtyNum))) : 25;
+    const qty = Number.isFinite(qtyNum) ? Math.max(1, Math.min(500, qtyNum)) : 25;
 
-    // ✅ Mobile-safe normalization happens here (real fix for your “26 items but says <24” bug)
+    // ✅ Robust: accepts string, string[], objects, arrays-with-multiline, etc.
     const items = normalizeLines(body.items);
 
     if (items.length < 24) {
@@ -34,7 +75,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create UNIQUE cards
+    // ✅ Create UNIQUE cards
     const generated = createBingoPackUnique({ items, qty });
 
     const pack: BingoPack = {
@@ -42,25 +83,27 @@ export async function POST(req: Request) {
       sponsorName,
       bannerUrl,
       logoUrl,
-      cards: generated.cards.map((c) => ({ id: c.id, grid: c.grid })),
+      cards: generated.cards,
     };
 
-    const pdfBuf = await renderBingoPackPdf(pack);
-    const pdfBase64 = Buffer.from(pdfBuf).toString("base64");
+    // Render PDF -> base64
+    const pdfBuffer = await renderBingoPackPdf(pack);
+    const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
 
-    // roster CSV
-    const csvLines = ["card_id"];
-    for (const c of pack.cards) csvLines.push(c.id);
+    // Roster CSV (Card IDs)
+    const csvLines = ["card_id", ...pack.cards.map((c) => c.id)];
     const csv = csvLines.join("\n");
 
     return NextResponse.json({
       ok: true,
       pdfBase64,
       csv,
-      meta: { requestedQty: qty, generatedQty: pack.cards.length },
+      count: pack.cards.length,
     });
   } catch (err: any) {
-    const msg = err?.message ? String(err.message) : "Unknown error";
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: err?.message || "Server error" },
+      { status: 500 }
+    );
   }
 }
