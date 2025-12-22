@@ -11,31 +11,7 @@ function mulberry32(seed: number) {
   };
 }
 
-function hashStringToSeed(str: string) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-export function makeCardId() {
-  // short-ish, readable
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out.slice(0, 4) + "-" + out.slice(4);
-}
-
-function normalizeItems(items: string[]) {
-  return items
-    .map((s) => (s ?? "").trim())
-    .filter(Boolean)
-    .map((s) => s.replace(/\s+/g, " "));
-}
-
-function shuffle<T>(arr: T[], rand: () => number) {
+function shuffle<T>(arr: T[], rand = Math.random) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
@@ -44,14 +20,16 @@ function shuffle<T>(arr: T[], rand: () => number) {
   return a;
 }
 
-// Make ONE 5x5 grid with center FREE.
-// Uses 24 unique items from pool.
-export function generateGrid(items: string[], seedKey: string): BingoGrid {
-  const clean = normalizeItems(items);
-  if (clean.length < 24) throw new Error("Need at least 24 items.");
+export function makeCardId(): string {
+  // short-ish, human readable
+  const part = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const part2 = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `${part}-${part2}`;
+}
 
-  const rand = mulberry32(hashStringToSeed(seedKey));
-  const picked = shuffle(clean, rand).slice(0, 24);
+export function generateGrid(items: string[], rand = Math.random): BingoGrid {
+  if (items.length < 24) throw new Error("Need at least 24 items.");
+  const picked = shuffle(items, rand).slice(0, 24);
 
   const grid: BingoGrid = [];
   let k = 0;
@@ -66,45 +44,42 @@ export function generateGrid(items: string[], seedKey: string): BingoGrid {
   return grid;
 }
 
-function gridSignature(grid: BingoGrid) {
-  // signature used to guarantee unique layouts
-  return grid.map((r) => r.join("|")).join("||");
+function gridKey(grid: BingoGrid): string {
+  // stable fingerprint for uniqueness
+  return grid.flat().join("|");
 }
 
-/**
- * Create a pack of UNIQUE cards (no duplicate grids).
- * Will attempt to generate until it has `qty` unique grids or hits a max attempt limit.
- */
-export function createBingoPack(items: string[], qty: number) {
-  const clean = normalizeItems(items);
-  if (qty < 1 || qty > 500) throw new Error("Quantity must be between 1 and 500.");
-  if (clean.length < 24) throw new Error("Need at least 24 items.");
+export function createBingoPackUnique(
+  items: string[],
+  quantity: number,
+  seed?: number
+): { cards: BingoCard[] } {
+  if (quantity < 1 || quantity > 500) throw new Error("Quantity must be between 1 and 500.");
+  if (items.length < 24) throw new Error("Need at least 24 items.");
+
+  const rand = seed != null ? mulberry32(seed) : Math.random;
 
   const cards: BingoCard[] = [];
   const seen = new Set<string>();
 
-  // With small pools (like 25–60 items), uniqueness will eventually cap out.
-  // This limit prevents infinite loops.
-  const maxAttempts = Math.max(5000, qty * 200);
+  // safeguard to avoid infinite loops if item pool is too small for requested uniqueness
+  const maxAttempts = Math.max(2000, quantity * 200);
 
   let attempts = 0;
-  while (cards.length < qty && attempts < maxAttempts) {
+  while (cards.length < quantity) {
     attempts++;
+    if (attempts > maxAttempts) {
+      throw new Error(
+        `Could not generate ${quantity} unique cards with the current item pool. Add more items or lower quantity.`
+      );
+    }
 
-    const id = makeCardId();
-    const grid = generateGrid(clean, `${id}-${attempts}-${Date.now()}`);
+    const grid = generateGrid(items, rand);
+    const key = gridKey(grid);
+    if (seen.has(key)) continue;
 
-    const sig = gridSignature(grid);
-    if (seen.has(sig)) continue;
-
-    seen.add(sig);
-    cards.push({ id, grid });
-  }
-
-  if (cards.length < qty) {
-    throw new Error(
-      `Could only generate ${cards.length} unique cards from this item pool. Increase pool size for higher quantities.`
-    );
+    seen.add(key);
+    cards.push({ id: makeCardId(), grid });
   }
 
   return { cards };
