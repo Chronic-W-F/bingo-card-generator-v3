@@ -1,11 +1,9 @@
+// pdf/BingoPackPdf.tsx
 import React from "react";
-import { Document, Page, Text, View, StyleSheet, Image, pdf } from "@react-pdf/renderer";
+import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer";
+import type { BingoCard } from "@/lib/bingo";
 
-export type BingoCell = string;
-export type BingoGrid = BingoCell[][];
-export type BingoCard = { id: string; grid: BingoGrid };
-
-export type BingoPack = {
+type Props = {
   packTitle: string;
   sponsorName: string;
   bannerUrl?: string;
@@ -14,31 +12,22 @@ export type BingoPack = {
 };
 
 const styles = StyleSheet.create({
-  page: { padding: 24, fontSize: 10, fontFamily: "Helvetica" },
+  page: { padding: 20, fontSize: 10 },
   headerWrap: { marginBottom: 10 },
   headerBar: {
     backgroundColor: "#111",
-    borderRadius: 8,
+    borderRadius: 10,
     padding: 10,
-    color: "#fff",
   },
-  headerTitle: { fontSize: 14, color: "#fff", marginBottom: 2 },
-  headerSub: { fontSize: 10, color: "#d0d0d0" },
+  title: { color: "white", fontSize: 18, fontWeight: 700 },
+  subtitle: { color: "white", fontSize: 10, marginTop: 3 },
 
-  metaRow: {
-    marginTop: 10,
-    marginBottom: 6,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    color: "#111",
-  },
+  banner: { width: "100%", height: 60, marginTop: 10, borderRadius: 10, objectFit: "cover" },
 
-  gridWrap: {
-    borderWidth: 1,
-    borderColor: "#333",
-    borderRadius: 8,
-    overflow: "hidden",
-  },
+  metaRow: { marginTop: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  cardId: { fontSize: 9, opacity: 0.85 },
+
+  grid: { marginTop: 10, borderWidth: 1, borderColor: "#333" },
   row: { flexDirection: "row" },
 
   cell: {
@@ -48,69 +37,58 @@ const styles = StyleSheet.create({
     borderColor: "#333",
     alignItems: "center",
     justifyContent: "center",
-    height: 70,
+    height: 64,
     padding: 6,
   },
-  cellNoRight: { borderRightWidth: 0 },
-  cellNoBottom: { borderBottomWidth: 0 },
+  cellLastCol: { borderRightWidth: 0 },
+  lastRowCell: { borderBottomWidth: 0 },
 
+  freeCell: { backgroundColor: "#f2f2f2" },
+  freeLogo: { width: 36, height: 36, marginBottom: 4, objectFit: "contain" },
   cellText: { textAlign: "center" },
 
-  freeCell: { backgroundColor: "#111" },
-  freeText: { color: "#fff", fontSize: 10, textAlign: "center" },
-
-  footer: { marginTop: 10, fontSize: 9, color: "#555" },
-
-  logo: { width: 28, height: 28, marginBottom: 4 },
-  banner: { width: "100%", height: 50, objectFit: "cover", borderRadius: 8, marginBottom: 8 },
+  footer: { marginTop: 8, fontSize: 9, opacity: 0.85 },
 });
 
-function BingoPackDoc({ pack }: { pack: BingoPack }) {
+export default function BingoPackPdf(props: Props) {
+  const { packTitle, sponsorName, bannerUrl, logoUrl, cards } = props;
+
   return (
     <Document>
-      {pack.cards.map((card) => (
+      {cards.map((card) => (
         <Page key={card.id} size="LETTER" style={styles.page}>
-          {pack.bannerUrl ? <Image src={pack.bannerUrl} style={styles.banner} /> : null}
-
           <View style={styles.headerWrap}>
             <View style={styles.headerBar}>
-              <Text style={styles.headerTitle}>{pack.packTitle}</Text>
-              <Text style={styles.headerSub}>Sponsor: {pack.sponsorName}</Text>
+              <Text style={styles.title}>{packTitle}</Text>
+              <Text style={styles.subtitle}>Sponsor: {sponsorName}</Text>
             </View>
 
+            {bannerUrl ? <Image style={styles.banner} src={bannerUrl} /> : null}
+
             <View style={styles.metaRow}>
-              <Text>Card ID: {card.id}</Text>
-              <Text>5×5 • Center is FREE</Text>
+              <Text style={styles.cardId}>Card ID: {card.id}</Text>
+              <Text style={styles.cardId}>5×5 • Center is FREE</Text>
             </View>
           </View>
 
-          <View style={styles.gridWrap}>
+          <View style={styles.grid}>
             {card.grid.map((row, rIdx) => (
               <View key={rIdx} style={styles.row}>
                 {row.map((cell, cIdx) => {
-                  const isLastCol = cIdx === row.length - 1;
-                  const isLastRow = rIdx === card.grid.length - 1;
-                  const isFree = cell === "FREE";
+                  const isLastCol = cIdx === 4;
+                  const isLastRow = rIdx === 4;
+                  const isFree = cell.text === "FREE";
+
+                  // IMPORTANT: no undefined/null in the style array
+                  const styleArr: any[] = [styles.cell];
+                  if (isLastCol) styleArr.push(styles.cellLastCol);
+                  if (isLastRow) styleArr.push(styles.lastRowCell);
+                  if (isFree) styleArr.push(styles.freeCell);
 
                   return (
-                    <View
-                      key={cIdx}
-                      style={[
-                        styles.cell,
-                        isLastCol ? styles.cellNoRight : {},
-                        isLastRow ? styles.cellNoBottom : {},
-                        isFree ? styles.freeCell : {},
-                      ]}
-                    >
-                      {isFree ? (
-                        <>
-                          {pack.logoUrl ? <Image src={pack.logoUrl} style={styles.logo} /> : null}
-                          <Text style={styles.freeText}>{pack.sponsorName}</Text>
-                          <Text style={styles.freeText}>FREE</Text>
-                        </>
-                      ) : (
-                        <Text style={styles.cellText}>{cell}</Text>
-                      )}
+                    <View key={cIdx} style={styleArr}>
+                      {isFree && logoUrl ? <Image style={styles.freeLogo} src={logoUrl} /> : null}
+                      <Text style={styles.cellText}>{cell.text}</Text>
                     </View>
                   );
                 })}
@@ -125,37 +103,4 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
       ))}
     </Document>
   );
-}
-
-// Convert ReadableStream/Uint8Array/Buffer -> Buffer
-async function toNodeBuffer(data: any): Promise<Buffer> {
-  if (Buffer.isBuffer(data)) return data;
-
-  if (data instanceof Uint8Array) return Buffer.from(data);
-
-  // ReadableStream (some @react-pdf versions)
-  if (data && typeof data.getReader === "function") {
-    const reader = data.getReader();
-    const chunks: Uint8Array[] = [];
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(value);
-    }
-    return Buffer.concat(chunks.map((u) => Buffer.from(u)));
-  }
-
-  // ArrayBuffer
-  if (data instanceof ArrayBuffer) return Buffer.from(new Uint8Array(data));
-
-  throw new Error("PDF renderer returned an unsupported type.");
-}
-
-export async function renderBingoPackPdf(pack: BingoPack): Promise<Buffer> {
-  const doc = <BingoPackDoc pack={pack} />;
-  const instance = pdf(doc);
-
-  // depending on version, this could be Buffer or ReadableStream
-  const out = await instance.toBuffer();
-  return await toNodeBuffer(out);
 }
