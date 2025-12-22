@@ -1,118 +1,68 @@
-// app/api/generate/route.ts
 import { NextResponse } from "next/server";
+import { createBingoPack } from "@/lib/bingo";
+import { renderBingoPackPdf } from "@/pdf/BingoPackPdf";
 
-export const runtime = "nodejs";
-
-type GeneratePayload = {
-  packTitle: string;
-  sponsorName: string;
-  bannerUrl?: string;
-  sponsorLogoUrl?: string;
-  quantity: number;
-  poolItems: string[];
-  // Future-proof: optional mappings, etc.
-};
-
-function normalizeLines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((s) => s.trim())
+function normalizeLines(text: unknown) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map((x) => x.trim())
     .filter(Boolean);
 }
 
-function isHttpUrl(value: string | undefined): boolean {
-  if (!value) return false;
-  try {
-    const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
+// Accept qty as number OR string, strip non-digits, parse int
+function coerceQty(qty: unknown) {
+  const raw = String(qty ?? "");
+  const cleaned = raw.replace(/[^\d]/g, "");
+  const n = Number.parseInt(cleaned, 10);
+  return { raw, cleaned, n };
 }
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Partial<GeneratePayload>;
+    const body = await req.json();
 
-    // --- Validate ---
-    const packTitle = (body.packTitle ?? "").trim();
-    const sponsorName = (body.sponsorName ?? "").trim();
-    const bannerUrl = (body.bannerUrl ?? "").trim();
-    const sponsorLogoUrl = (body.sponsorLogoUrl ?? "").trim();
+    const packTitle = String(body?.packTitle ?? "Bingo Pack").trim();
+    const sponsorName = String(body?.sponsorName ?? "Sponsor").trim();
+    const bannerUrl = body?.bannerUrl ? String(body.bannerUrl).trim() : null;
+    const logoUrl = body?.logoUrl ? String(body.logoUrl).trim() : null;
 
-    const quantity = Number(body.quantity);
-    const poolItems = Array.isArray(body.poolItems) ? body.poolItems : [];
+    const { raw, cleaned, n: qtyNum } = coerceQty(body?.qty);
 
-    if (!packTitle) {
+    const itemsArr =
+      Array.isArray(body?.items) ? body.items.map((x: any) => String(x).trim()).filter(Boolean) : normalizeLines(body?.items);
+
+    if (!Number.isFinite(qtyNum) || !Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > 500) {
       return NextResponse.json(
-        { ok: false, error: "Pack title is required." },
+        {
+          error: "Quantity must be between 1 and 500.",
+          debug: { qtyRaw: raw, qtyCleaned: cleaned, qtyParsed: qtyNum },
+        },
         { status: 400 }
       );
     }
 
-    if (!sponsorName) {
+    if (itemsArr.length < 24) {
       return NextResponse.json(
-        { ok: false, error: "Sponsor name is required." },
+        { error: `Need at least 24 square items (you have ${itemsArr.length}).` },
         { status: 400 }
       );
     }
 
-    if (!Number.isFinite(quantity) || quantity < 1 || quantity > 500) {
-      return NextResponse.json(
-        { ok: false, error: "Quantity must be between 1 and 500." },
-        { status: 400 }
-      );
-    }
-
-    const cleanedPool = poolItems
-      .map((s) => String(s).trim())
-      .filter(Boolean);
-
-    if (cleanedPool.length < 24) {
-      return NextResponse.json(
-        { ok: false, error: `Need at least 24 pool items. You have ${cleanedPool.length}.` },
-        { status: 400 }
-      );
-    }
-
-    // URLs optional but if provided should be http(s)
-    if (bannerUrl && !isHttpUrl(bannerUrl)) {
-      return NextResponse.json(
-        { ok: false, error: "Banner image URL must be a valid http(s) URL." },
-        { status: 400 }
-      );
-    }
-    if (sponsorLogoUrl && !isHttpUrl(sponsorLogoUrl)) {
-      return NextResponse.json(
-        { ok: false, error: "Sponsor logo URL must be a valid http(s) URL." },
-        { status: 400 }
-      );
-    }
-
-    // --- TEMP RESPONSE ---
-    // This is the key fix: ALWAYS return JSON, never an empty body.
-    // We'll wire real PDF/CSV generation next once we confirm the endpoint is stable.
-    return NextResponse.json({
-      ok: true,
-      message: "API is alive. Next step: wire PDF + CSV generation.",
-      echo: {
-        packTitle,
-        sponsorName,
-        bannerUrl: bannerUrl || null,
-        sponsorLogoUrl: sponsorLogoUrl || null,
-        quantity,
-        poolCount: cleanedPool.length,
-        first5: cleanedPool.slice(0, 5),
-      },
+    const pack = createBingoPack({
+      packTitle,
+      sponsorName,
+      bannerUrl,
+      logoUrl,
+      qty: qtyNum,
+      items: itemsArr,
     });
+
+    const { pdfBase64, csv } = await renderBingoPackPdf(pack);
+
+    return NextResponse.json({ pdfBase64, csv });
   } catch (err: any) {
-    // ALWAYS return JSON on errors so the frontend never hits "Unexpected end of JSON input"
     return NextResponse.json(
-      {
-        ok: false,
-        error: "API crashed while parsing or generating.",
-        details: String(err?.message ?? err ?? "unknown"),
-      },
+      { error: err?.message || "Server error." },
       { status: 500 }
     );
   }
