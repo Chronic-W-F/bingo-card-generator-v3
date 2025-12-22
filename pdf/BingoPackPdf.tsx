@@ -1,13 +1,6 @@
 // pdf/BingoPackPdf.tsx
 import React from "react";
-import {
-  Document,
-  Page,
-  Text,
-  View,
-  StyleSheet,
-  pdf,
-} from "@react-pdf/renderer";
+import { Document, Page, Text, View, StyleSheet, pdf } from "@react-pdf/renderer";
 
 export type BingoGrid = string[][];
 export type BingoCard = { id: string; grid: BingoGrid };
@@ -23,55 +16,40 @@ export type BingoPack = {
 const styles = StyleSheet.create({
   page: { padding: 24, fontSize: 10 },
   headerWrap: { marginBottom: 10 },
-  headerBar: {
-    backgroundColor: "#000",
-    padding: 8,
-    borderRadius: 6,
-  },
-  headerTitle: { color: "#fff", fontSize: 14, fontWeight: "bold" },
+  headerBar: { backgroundColor: "#000", padding: 8, borderRadius: 6 },
+  headerTitle: { color: "#fff", fontSize: 14, fontWeight: "bold" as const },
   headerSponsor: { color: "#ddd", fontSize: 9 },
+
   cardIdRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+    flexDirection: "row" as const,
+    justifyContent: "space-between" as const,
     marginBottom: 6,
   },
-  grid: {
-    borderWidth: 1,
-    borderColor: "#333",
-  },
-  row: {
-    flexDirection: "row",
-  },
+
+  grid: { borderWidth: 1, borderColor: "#333" },
+  row: { flexDirection: "row" as const },
+
   cell: {
     flex: 1,
     borderRightWidth: 1,
     borderBottomWidth: 1,
     borderColor: "#333",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
     height: 48,
     padding: 2,
   },
-  // ✅ make "last column" and "last row" not double-border
+
+  // last col/row fixes (no double border)
   cellLastCol: { borderRightWidth: 0 },
   cellLastRow: { borderBottomWidth: 0 },
 
-  cellText: {
-    textAlign: "center",
-    fontSize: 9,
-  },
-  freeCell: {
-    backgroundColor: "#000",
-  },
-  freeText: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-  footer: {
-    marginTop: 6,
-    fontSize: 8,
-    color: "#555",
-  },
+  cellText: { textAlign: "center" as const, fontSize: 9 },
+
+  freeCell: { backgroundColor: "#000" },
+  freeText: { color: "#fff", fontWeight: "bold" as const },
+
+  footer: { marginTop: 6, fontSize: 8, color: "#555" },
 });
 
 function BingoPackDoc({ pack }: { pack: BingoPack }) {
@@ -82,9 +60,7 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
           <View style={styles.headerWrap}>
             <View style={styles.headerBar}>
               <Text style={styles.headerTitle}>{pack.packTitle}</Text>
-              <Text style={styles.headerSponsor}>
-                Sponsor: {pack.sponsorName}
-              </Text>
+              <Text style={styles.headerSponsor}>Sponsor: {pack.sponsorName}</Text>
             </View>
           </View>
 
@@ -99,13 +75,13 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
                 {row.map((cell, cIdx) => {
                   const isFree = cell === "FREE";
 
-                  // ✅ Build a style array with ONLY real styles (no undefined/null)
-                  const cellStyles = [styles.cell];
+                  // ✅ IMPORTANT: allow mixed style objects
+                  const cellStyles: any[] = [styles.cell];
                   if (cIdx === 4) cellStyles.push(styles.cellLastCol);
                   if (rIdx === 4) cellStyles.push(styles.cellLastRow);
                   if (isFree) cellStyles.push(styles.freeCell);
 
-                  const textStyles = [styles.cellText];
+                  const textStyles: any[] = [styles.cellText];
                   if (isFree) textStyles.push(styles.freeText);
 
                   return (
@@ -121,8 +97,7 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
           </View>
 
           <Text style={styles.footer}>
-            Verification: Screenshot your card with Card ID visible when you
-            claim bingo.
+            Verification: Screenshot your card with Card ID visible when you claim bingo.
           </Text>
         </Page>
       ))}
@@ -130,9 +105,7 @@ function BingoPackDoc({ pack }: { pack: BingoPack }) {
   );
 }
 
-/**
- * ✅ Always return a Buffer (works clean on Vercel)
- */
+/** ✅ Always return a Buffer (Vercel-safe) */
 export async function renderBingoPackPdf(pack: BingoPack): Promise<Buffer> {
   const doc = <BingoPackDoc pack={pack} />;
   const instance = pdf(doc);
