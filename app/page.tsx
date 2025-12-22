@@ -3,44 +3,47 @@
 import { useEffect, useMemo, useState } from "react";
 
 type GeneratedPack = {
-  packTitle: string;
-  sponsorName: string;
-  pdfBase64: string; // base64 (no data:)
+  pdfBase64: string;
   csv: string;
   createdAt: number;
   requestKey: string;
 };
 
-type SponsorSkin = {
-  id: string;
-  label: string;
-  bannerUrl: string;
-  logoUrl: string;
-};
+const FORM_KEY = "grower-bingo:form:v2";
 
-const SKINS_KEY = "grower-bingo:sponsor-skins:v1";
-const FORM_KEY = "grower-bingo:form:v1";
-
-type FormState = {
-  packTitle: string;
-  sponsorName: string;
-  bannerUrl: string;
-  logoUrl: string;
-  qty: string;
-  items: string;
-  selectedSkinId: string;
-  newSkinLabel: string;
-};
+const DEFAULT_ITEMS = `Trellis net
+Lollipop
+Defoliate
+Stretch week
+Dryback
+Runoff EC
+VPD off
+Heat stress
+Herm watch
+Foxtails
+Amber trichomes
+Cloudy trichomes
+Flush debate
+Leaf taco
+Stunted growth
+Light burn
+Cal-Mag
+pH swing
+Overwatered
+Underwatered
+Powdery mildew
+Fungus gnats
+Bud rot
+Nute lockout
+Late flower fade`;
 
 function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
-  a.rel = "noopener";
   a.click();
-  // revoke a bit later so mobile has time to grab it
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  URL.revokeObjectURL(url);
 }
 
 function safeFileName(s: string) {
@@ -53,10 +56,6 @@ function safeFileName(s: string) {
   );
 }
 
-function makeLocalId() {
-  return Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
-}
-
 function normalizeLines(text: string) {
   return text
     .split(/\r?\n/)
@@ -64,10 +63,8 @@ function normalizeLines(text: string) {
     .filter(Boolean);
 }
 
-// remove invisible / non-digit chars (mobile keyboards can insert junk)
 function cleanNumericString(v: unknown) {
-  const s = String(v ?? "");
-  return s.replace(/[^\d]/g, "");
+  return String(v ?? "").replace(/[^\d]/g, "");
 }
 
 function parseQty(v: unknown) {
@@ -76,14 +73,7 @@ function parseQty(v: unknown) {
   return { cleaned, n };
 }
 
-function buildRequestKey(payload: {
-  packTitle: string;
-  sponsorName: string;
-  bannerUrl: string;
-  logoUrl: string;
-  qty: number;
-  items: string[];
-}) {
+function buildRequestKey(payload: any) {
   return JSON.stringify(payload);
 }
 
@@ -95,7 +85,7 @@ async function safeJsonFetch(input: RequestInfo, init?: RequestInit) {
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error(text || `Server returned an empty response (HTTP ${res.status}).`);
+    throw new Error(text || `Server returned empty response (HTTP ${res.status}).`);
   }
 
   if (!res.ok) {
@@ -105,72 +95,26 @@ async function safeJsonFetch(input: RequestInfo, init?: RequestInit) {
   return data;
 }
 
-function base64ToPdfBlob(b64: string) {
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  return new Blob([bytes], { type: "application/pdf" });
-}
-
-function csvToBlob(csv: string) {
-  return new Blob([csv], { type: "text/csv;charset=utf-8" });
-}
-
 export default function HomePage() {
   const [packTitle, setPackTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
   const [bannerUrl, setBannerUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
+
+  // keep qty as string for mobile keyboards
   const [qty, setQty] = useState<string>("25");
-  const [items, setItems] = useState<string>("");
+  const [items, setItems] = useState<string>(DEFAULT_ITEMS);
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [status, setStatus] = useState<string>("");
-
   const [pack, setPack] = useState<GeneratedPack | null>(null);
 
-  const [skins, setSkins] = useState<SponsorSkin[]>([]);
-  const [selectedSkinId, setSelectedSkinId] = useState<string>("");
-  const [newSkinLabel, setNewSkinLabel] = useState<string>("");
-
-  // manual download links (mobile-safe)
-  const [pdfUrl, setPdfUrl] = useState<string>("");
-  const [csvUrl, setCsvUrl] = useState<string>("");
-  const [pdfName, setPdfName] = useState<string>("");
-  const [csvName, setCsvName] = useState<string>("");
-
-  // cleanup object URLs
-  useEffect(() => {
-    return () => {
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-      if (csvUrl) URL.revokeObjectURL(csvUrl);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Load skins
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SKINS_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setSkins(parsed);
-    } catch {}
-  }, []);
-
-  // Persist skins
-  useEffect(() => {
-    try {
-      localStorage.setItem(SKINS_KEY, JSON.stringify(skins));
-    } catch {}
-  }, [skins]);
-
-  // Load form (coerce old qty types)
+  // Load saved form (if any)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(FORM_KEY);
       if (!raw) return;
-
-      const f: any = JSON.parse(raw);
+      const f = JSON.parse(raw);
 
       if (typeof f.packTitle === "string") setPackTitle(f.packTitle);
       if (typeof f.sponsorName === "string") setSponsorName(f.sponsorName);
@@ -183,30 +127,25 @@ export default function HomePage() {
       }
 
       if (typeof f.items === "string") setItems(f.items);
-      if (typeof f.selectedSkinId === "string") setSelectedSkinId(f.selectedSkinId);
-      if (typeof f.newSkinLabel === "string") setNewSkinLabel(f.newSkinLabel);
     } catch {}
   }, []);
 
-  // Persist form
+  // Save form
   useEffect(() => {
     try {
-      const form: FormState = {
-        packTitle,
-        sponsorName,
-        bannerUrl,
-        logoUrl,
-        qty,
-        items,
-        selectedSkinId,
-        newSkinLabel,
-      };
-      localStorage.setItem(FORM_KEY, JSON.stringify(form));
+      localStorage.setItem(
+        FORM_KEY,
+        JSON.stringify({ packTitle, sponsorName, bannerUrl, logoUrl, qty, items })
+      );
     } catch {}
-  }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items, selectedSkinId, newSkinLabel]);
+  }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items]);
+
+  // Clear error when user edits inputs (prevents “stuck” error)
+  useEffect(() => {
+    setErr(null);
+  }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items]);
 
   const itemsList = useMemo(() => normalizeLines(items), [items]);
-
   const { cleaned: qtyCleaned, n: qtyNumParsed } = useMemo(() => parseQty(qty), [qty]);
 
   const currentRequestKey = useMemo(() => {
@@ -223,72 +162,21 @@ export default function HomePage() {
 
   const packIsFresh = pack?.requestKey === currentRequestKey;
 
-  function applySkin(id: string) {
-    setSelectedSkinId(id);
-    const skin = skins.find((s) => s.id === id);
-    if (!skin) return;
-    setSponsorName(skin.label);
-    setBannerUrl(skin.bannerUrl);
-    setLogoUrl(skin.logoUrl);
-  }
-
-  function saveCurrentAsSkin() {
-    setErr(null);
-    const label = (newSkinLabel || sponsorName || "Sponsor").trim();
-    if (!label) {
-      setErr("Enter a sponsor name (or a Skin label) first.");
-      return;
-    }
-
-    const skin: SponsorSkin = {
-      id: makeLocalId(),
-      label,
-      bannerUrl: bannerUrl.trim(),
-      logoUrl: logoUrl.trim(),
-    };
-
-    setSkins((prev) => [skin, ...prev]);
-    setSelectedSkinId(skin.id);
-    setNewSkinLabel("");
-  }
-
-  function deleteSelectedSkin() {
-    setErr(null);
-    if (!selectedSkinId) return;
-    setSkins((prev) => prev.filter((s) => s.id !== selectedSkinId));
-    setSelectedSkinId("");
-  }
-
   function clearSavedSettings() {
     try {
       localStorage.removeItem(FORM_KEY);
-      localStorage.removeItem(SKINS_KEY);
     } catch {}
-
-    // reset UI
     setPackTitle("Harvest Heroes Bingo");
     setSponsorName("Joe’s Grows");
     setBannerUrl("");
     setLogoUrl("");
     setQty("25");
-    setItems("");
-    setSkins([]);
-    setSelectedSkinId("");
-    setNewSkinLabel("");
+    setItems(DEFAULT_ITEMS);
     setPack(null);
     setErr(null);
-    setStatus("Cleared saved settings.");
-    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    if (csvUrl) URL.revokeObjectURL(csvUrl);
-    setPdfUrl("");
-    setCsvUrl("");
-    setPdfName("");
-    setCsvName("");
   }
 
   function validateInputs(): { qtyNum: number; itemsArr: string[] } | null {
-    setErr(null);
-
     const qtyNum = qtyNumParsed;
 
     if (!Number.isFinite(qtyNum) || !Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > 500) {
@@ -305,28 +193,7 @@ export default function HomePage() {
     return { qtyNum, itemsArr };
   }
 
-  function buildDownloadsFromPack(p: GeneratedPack) {
-    // revoke old
-    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    if (csvUrl) URL.revokeObjectURL(csvUrl);
-
-    const pdfBlob = base64ToPdfBlob(p.pdfBase64);
-    const csvBlob = csvToBlob(p.csv);
-
-    const pdfObjUrl = URL.createObjectURL(pdfBlob);
-    const csvObjUrl = URL.createObjectURL(csvBlob);
-
-    const pdfFilename = `${safeFileName(p.packTitle)}_${safeFileName(p.sponsorName)}.pdf`;
-    const csvFilename = `${safeFileName(p.packTitle)}_${safeFileName(p.sponsorName)}_roster.csv`;
-
-    setPdfUrl(pdfObjUrl);
-    setCsvUrl(csvObjUrl);
-    setPdfName(pdfFilename);
-    setCsvName(csvFilename);
-  }
-
   async function generatePack(): Promise<GeneratedPack> {
-    setStatus("");
     const validated = validateInputs();
     if (!validated) throw new Error("Invalid inputs.");
 
@@ -361,8 +228,6 @@ export default function HomePage() {
     if (typeof csv !== "string") throw new Error("Server did not return csv.");
 
     const newPack: GeneratedPack = {
-      packTitle: payload.packTitle,
-      sponsorName: payload.sponsorName,
       pdfBase64,
       csv,
       createdAt: Date.now(),
@@ -370,34 +235,28 @@ export default function HomePage() {
     };
 
     setPack(newPack);
-    buildDownloadsFromPack(newPack);
-    setStatus("Pack generated. Use the download buttons below (mobile-safe).");
     return newPack;
   }
 
-  function attemptAutoDownloadPdf(p: GeneratedPack) {
-    try {
-      const pdfBlob = base64ToPdfBlob(p.pdfBase64);
-      const filename = `${safeFileName(p.packTitle)}_${safeFileName(p.sponsorName)}.pdf`;
-      downloadBlob(filename, pdfBlob);
-    } catch {}
+  function downloadPdfFromPack(p: GeneratedPack) {
+    const bytes = Uint8Array.from(atob(p.pdfBase64), (c) => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const filename = `${safeFileName(packTitle)}_${safeFileName(sponsorName)}.pdf`;
+    downloadBlob(filename, blob);
   }
 
-  function attemptAutoDownloadCsv(p: GeneratedPack) {
-    try {
-      const csvBlob = csvToBlob(p.csv);
-      const filename = `${safeFileName(p.packTitle)}_${safeFileName(p.sponsorName)}_roster.csv`;
-      downloadBlob(filename, csvBlob);
-    } catch {}
+  function downloadCsvFromPack(p: GeneratedPack) {
+    const blob = new Blob([p.csv], { type: "text/csv;charset=utf-8" });
+    const filename = `${safeFileName(packTitle)}_${safeFileName(sponsorName)}_roster.csv`;
+    downloadBlob(filename, blob);
   }
 
   async function onGenerateAndDownloadPdf() {
-    setErr(null);
     setBusy(true);
+    setErr(null);
     try {
       const p = await generatePack();
-      // try auto-download (may be blocked on mobile)
-      attemptAutoDownloadPdf(p);
+      downloadPdfFromPack(p);
     } catch (e: any) {
       setErr(e?.message || "Failed to generate.");
     } finally {
@@ -408,18 +267,15 @@ export default function HomePage() {
   async function onDownloadCsvRoster() {
     setErr(null);
 
+    if (pack && packIsFresh) {
+      downloadCsvFromPack(pack);
+      return;
+    }
+
     setBusy(true);
     try {
-      let p: GeneratedPack;
-      if (pack && packIsFresh) {
-        p = pack;
-        buildDownloadsFromPack(pack);
-        setStatus("Pack already generated. Use the download buttons below (mobile-safe).");
-      } else {
-        p = await generatePack();
-      }
-      // try auto-download (may be blocked on mobile)
-      attemptAutoDownloadCsv(p);
+      const p = await generatePack();
+      downloadCsvFromPack(p);
     } catch (e: any) {
       setErr(e?.message || "Failed to generate.");
     } finally {
@@ -430,89 +286,37 @@ export default function HomePage() {
   return (
     <main
       style={{
-        maxWidth: 740,
+        maxWidth: 780,
         margin: "0 auto",
         padding: 16,
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 10 }}>Grower Bingo Generator</h1>
+      <h1 style={{ fontSize: 34, fontWeight: 800, marginBottom: 10 }}>
+        Grower Bingo Generator
+      </h1>
 
       <button
-        type="button"
         onClick={clearSavedSettings}
+        disabled={busy}
         style={{
           padding: "10px 14px",
           borderRadius: 999,
-          border: "1px solid #b00020",
-          background: "#fff",
+          border: "2px solid #b00020",
+          background: "white",
           color: "#b00020",
-          cursor: "pointer",
-          marginBottom: 10,
+          fontWeight: 700,
+          cursor: busy ? "not-allowed" : "pointer",
+          marginBottom: 12,
         }}
       >
         Clear saved settings
       </button>
 
-      {/* DEBUG LINE */}
-      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 12 }}>
+      {/* Debug line */}
+      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
         Debug qty: raw="{String(qty)}" cleaned="{qtyCleaned}" parsed={String(qtyNumParsed)}
       </div>
-
-      <section style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <select
-            value={selectedSkinId}
-            onChange={(e) => applySkin(e.target.value)}
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", minWidth: 220 }}
-          >
-            <option value="">Select a saved skin…</option>
-            {skins.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-
-          <input
-            value={newSkinLabel}
-            onChange={(e) => setNewSkinLabel(e.target.value)}
-            placeholder="Skin label (optional)"
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #ccc", minWidth: 200 }}
-          />
-
-          <button
-            type="button"
-            onClick={saveCurrentAsSkin}
-            disabled={busy}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 999,
-              border: "1px solid #000",
-              background: "#000",
-              color: "#fff",
-              cursor: busy ? "not-allowed" : "pointer",
-            }}
-          >
-            Save current as skin
-          </button>
-
-          <button
-            type="button"
-            onClick={deleteSelectedSkin}
-            disabled={busy || !selectedSkinId}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 999,
-              border: "1px solid #ccc",
-              background: "#fff",
-              cursor: busy || !selectedSkinId ? "not-allowed" : "pointer",
-            }}
-          >
-            Delete selected skin
-          </button>
-        </div>
-      </section>
 
       <section style={{ display: "grid", gap: 12 }}>
         <label style={{ display: "grid", gap: 6 }}>
@@ -565,7 +369,9 @@ export default function HomePage() {
         </label>
 
         <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Square pool items (one per line — need 24+). Current: {itemsList.length}</span>
+          <span style={{ fontWeight: 700 }}>
+            Square pool items (one per line — need 24+). Current: {itemsList.length}
+          </span>
           <textarea
             value={items}
             onChange={(e) => setItems(e.target.value)}
@@ -573,7 +379,7 @@ export default function HomePage() {
               padding: 12,
               borderRadius: 12,
               border: "1px solid #ccc",
-              minHeight: 220,
+              minHeight: 240,
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
             }}
           />
@@ -585,15 +391,8 @@ export default function HomePage() {
           </div>
         ) : null}
 
-        {status ? (
-          <div style={{ fontSize: 13, opacity: 0.9 }}>
-            <b>Status:</b> {status}
-          </div>
-        ) : null}
-
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
           <button
-            type="button"
             onClick={onGenerateAndDownloadPdf}
             disabled={busy}
             style={{
@@ -603,13 +402,13 @@ export default function HomePage() {
               background: "#111",
               color: "white",
               cursor: busy ? "not-allowed" : "pointer",
+              minWidth: 220,
             }}
           >
             {busy ? "Generating…" : "Generate + Download PDF"}
           </button>
 
           <button
-            type="button"
             onClick={onDownloadCsvRoster}
             disabled={busy}
             style={{
@@ -619,67 +418,19 @@ export default function HomePage() {
               background: "white",
               color: "#111",
               cursor: busy ? "not-allowed" : "pointer",
+              minWidth: 200,
             }}
           >
             Download CSV (Roster)
           </button>
         </div>
 
-        {/* ✅ Mobile-safe download links */}
-        {pdfUrl || csvUrl ? (
-          <div style={{ marginTop: 14, border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Downloads (tap to save)</div>
-
-            {pdfUrl ? (
-              <a
-                href={pdfUrl}
-                download={pdfName || "bingo_pack.pdf"}
-                style={{
-                  display: "inline-block",
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #111",
-                  background: "#111",
-                  color: "#fff",
-                  textDecoration: "none",
-                  marginRight: 10,
-                  marginBottom: 10,
-                }}
-              >
-                Tap to download PDF
-              </a>
-            ) : null}
-
-            {csvUrl ? (
-              <a
-                href={csvUrl}
-                download={csvName || "bingo_roster.csv"}
-                style={{
-                  display: "inline-block",
-                  padding: "12px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #111",
-                  background: "#fff",
-                  color: "#111",
-                  textDecoration: "none",
-                }}
-              >
-                Tap to download CSV
-              </a>
-            ) : null}
-
-            <div style={{ fontSize: 12, opacity: 0.85, marginTop: 10 }}>
-              If your phone blocks the auto-download, these buttons will still work every time.
-            </div>
-          </div>
-        ) : null}
-
         {pack ? (
           <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
-            Last generated: <b>{pack.packTitle}</b> — {new Date(pack.createdAt).toLocaleString()}
+            Last generated: <b>{packTitle}</b> — {new Date(pack.createdAt).toLocaleString()}
           </div>
         ) : null}
       </section>
     </main>
   );
-        }
+}
