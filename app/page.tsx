@@ -62,14 +62,17 @@ function normalizeLines(text: string) {
     .filter(Boolean);
 }
 
-// Digits-only sanitizer (Android keyboards can inject invisible junk)
-function digitsOnly(v: unknown) {
-  return String(v ?? "").replace(/[^\d]/g, "");
+// Remove invisible characters (mobile can insert weird spaces)
+function cleanNumericString(v: unknown) {
+  const s = String(v ?? "");
+  // keep digits only
+  const digitsOnly = s.replace(/[^\d]/g, "");
+  return digitsOnly;
 }
 
 function parseQty(v: unknown) {
-  const cleaned = digitsOnly(v);
-  const n = cleaned ? Number.parseInt(cleaned, 10) : NaN;
+  const cleaned = cleanNumericString(v);
+  const n = Number.parseInt(cleaned, 10);
   return { cleaned, n };
 }
 
@@ -108,9 +111,8 @@ export default function HomePage() {
   const [bannerUrl, setBannerUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
 
-  // keep as string (controlled input), but store DIGITS ONLY always
+  // keep as string always
   const [qty, setQty] = useState<string>("25");
-
   const [items, setItems] = useState<string>("");
 
   const [busy, setBusy] = useState(false);
@@ -120,6 +122,11 @@ export default function HomePage() {
   const [skins, setSkins] = useState<SponsorSkin[]>([]);
   const [selectedSkinId, setSelectedSkinId] = useState<string>("");
   const [newSkinLabel, setNewSkinLabel] = useState<string>("");
+
+  const itemsList = useMemo(() => normalizeLines(items), [items]);
+
+  // purely for display (debug)
+  const { cleaned: qtyCleanedUI, n: qtyParsedUI } = useMemo(() => parseQty(qty), [qty]);
 
   // Load skins
   useEffect(() => {
@@ -138,7 +145,7 @@ export default function HomePage() {
     } catch {}
   }, [skins]);
 
-  // Load form (IMPORTANT: do NOT force empty back to 25)
+  // Load form (coerce old qty types)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(FORM_KEY);
@@ -153,15 +160,7 @@ export default function HomePage() {
 
       if (f.qty !== undefined) {
         const { cleaned, n } = parseQty(f.qty);
-
-        // If user previously left it blank, keep it blank
-        if (cleaned === "") {
-          setQty("");
-        } else if (Number.isFinite(n)) {
-          setQty(String(n));
-        } else {
-          setQty("25");
-        }
+        setQty(cleaned || (Number.isFinite(n) ? String(n) : "25"));
       }
 
       if (typeof f.items === "string") setItems(f.items);
@@ -186,25 +185,6 @@ export default function HomePage() {
       localStorage.setItem(FORM_KEY, JSON.stringify(form));
     } catch {}
   }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items, selectedSkinId, newSkinLabel]);
-
-  const itemsList = useMemo(() => normalizeLines(items), [items]);
-
-  // Always parse from current qty string
-  const { cleaned: qtyCleaned, n: qtyNumParsed } = useMemo(() => parseQty(qty), [qty]);
-
-  const currentRequestKey = useMemo(() => {
-    const safeQty = Number.isFinite(qtyNumParsed) ? qtyNumParsed : 0;
-    return buildRequestKey({
-      packTitle: packTitle.trim(),
-      sponsorName: sponsorName.trim(),
-      bannerUrl: bannerUrl.trim(),
-      logoUrl: logoUrl.trim(),
-      qty: safeQty,
-      items: itemsList,
-    });
-  }, [packTitle, sponsorName, bannerUrl, logoUrl, qtyNumParsed, itemsList]);
-
-  const packIsFresh = pack?.requestKey === currentRequestKey;
 
   function applySkin(id: string) {
     setSelectedSkinId(id);
@@ -242,33 +222,26 @@ export default function HomePage() {
     setSelectedSkinId("");
   }
 
-  function clearSavedSettings() {
-    try {
-      localStorage.removeItem(FORM_KEY);
-      localStorage.removeItem(SKINS_KEY);
-    } catch {}
-
-    // reset state
-    setPackTitle("Harvest Heroes Bingo");
-    setSponsorName("Joe’s Grows");
-    setBannerUrl("");
-    setLogoUrl("");
-    setQty("25");
-    setItems("");
-    setSkins([]);
-    setSelectedSkinId("");
-    setNewSkinLabel("");
-    setPack(null);
-    setErr(null);
-  }
-
   function validateInputs(): { qtyNum: number; itemsArr: string[] } | null {
     setErr(null);
 
-    const qtyNum = qtyNumParsed;
+    // ✅ IMPORTANT: re-parse FRESH at click-time (do not rely on memo)
+    const { cleaned, n } = parseQty(qty);
 
-    if (!Number.isFinite(qtyNum) || !Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > 500) {
-      setErr("Quantity must be between 1 and 500.");
+    // keep the input sanitized (removes invisible chars / spaces)
+    if (cleaned !== qty) setQty(cleaned);
+
+    const qtyNum = n;
+
+    const finite = Number.isFinite(qtyNum);
+    const integer = Number.isInteger(qtyNum);
+
+    if (!finite || !integer || qtyNum < 1 || qtyNum > 500) {
+      setErr(
+        `Quantity must be between 1 and 500. (debug: raw="${String(qty)}" cleaned="${cleaned}" parsed="${String(
+          qtyNum
+        )}" finite=${String(finite)} integer=${String(integer)})`
+      );
       return null;
     }
 
@@ -341,6 +314,20 @@ export default function HomePage() {
     downloadBlob(filename, blob);
   }
 
+  const currentRequestKey = useMemo(() => {
+    const safeQty = Number.isFinite(qtyParsedUI) ? qtyParsedUI : 0;
+    return buildRequestKey({
+      packTitle: packTitle.trim(),
+      sponsorName: sponsorName.trim(),
+      bannerUrl: bannerUrl.trim(),
+      logoUrl: logoUrl.trim(),
+      qty: safeQty,
+      items: itemsList,
+    });
+  }, [packTitle, sponsorName, bannerUrl, logoUrl, qtyParsedUI, itemsList]);
+
+  const packIsFresh = pack?.requestKey === currentRequestKey;
+
   async function onGenerateAndDownloadPdf() {
     setErr(null);
     setBusy(true);
@@ -373,29 +360,47 @@ export default function HomePage() {
     }
   }
 
+  function clearSavedSettings() {
+    try {
+      localStorage.removeItem(FORM_KEY);
+      localStorage.removeItem(SKINS_KEY);
+    } catch {}
+
+    // reset state
+    setPackTitle("Harvest Heroes Bingo");
+    setSponsorName("Joe’s Grows");
+    setBannerUrl("");
+    setLogoUrl("");
+    setQty("25");
+    setItems("");
+    setSkins([]);
+    setSelectedSkinId("");
+    setNewSkinLabel("");
+    setPack(null);
+    setErr(null);
+  }
+
   return (
     <main style={{ maxWidth: 740, margin: "0 auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12 }}>Grower Bingo Generator</h1>
 
       <button
         onClick={clearSavedSettings}
-        disabled={busy}
         style={{
           padding: "10px 14px",
           borderRadius: 999,
           border: "1px solid #b00020",
-          color: "#b00020",
           background: "#fff",
-          marginBottom: 12,
-          cursor: busy ? "not-allowed" : "pointer",
+          color: "#b00020",
+          cursor: "pointer",
+          marginBottom: 10,
         }}
       >
         Clear saved settings
       </button>
 
-      {/* REAL debug that actually evaluates */}
       <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
-        Debug qty: raw=<b>{JSON.stringify(qty)}</b> cleaned=<b>{JSON.stringify(qtyCleaned)}</b> parsed=<b>{String(qtyNumParsed)}</b>
+        Debug qty: raw="<b>{String(qty)}</b>" cleaned="<b>{qtyCleanedUI}</b>" parsed=<b>{String(qtyParsedUI)}</b>
       </div>
 
       <section style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 16 }}>
@@ -475,12 +480,9 @@ export default function HomePage() {
         <label style={{ display: "grid", gap: 6 }}>
           <span style={{ fontWeight: 600 }}>Quantity (1–500)</span>
           <input
-            type="number"
-            min={1}
-            max={500}
             inputMode="numeric"
             value={qty}
-            onChange={(e) => setQty(digitsOnly(e.target.value))}
+            onChange={(e) => setQty(e.target.value)}
             style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc", width: 180 }}
             placeholder="25"
           />
