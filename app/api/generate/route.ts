@@ -14,6 +14,33 @@ function normalizeLines(v: unknown) {
     .filter(Boolean);
 }
 
+async function toArrayBufferMaybe(
+  input: unknown
+): Promise<ArrayBuffer> {
+  // Buffer
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(input)) {
+    return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+  }
+
+  // Uint8Array / ArrayBuffer
+  if (input instanceof ArrayBuffer) return input;
+  if (input instanceof Uint8Array) return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+
+  // ReadableStream (what you're hitting)
+  // new Response(stream).arrayBuffer() works in Node runtimes that include fetch/web streams (Next does)
+  if (input && typeof (input as any).getReader === "function") {
+    const ab = await new Response(input as any).arrayBuffer();
+    return ab;
+  }
+
+  // Fallback: if it’s already a Response-like
+  if (input && typeof (input as any).arrayBuffer === "function") {
+    return await (input as any).arrayBuffer();
+  }
+
+  throw new Error("PDF renderer returned an unsupported type.");
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -25,17 +52,24 @@ export async function POST(req: Request) {
     const logoUrlRaw = body.logoUrl;
 
     const bannerUrl =
-      typeof bannerUrlRaw === "string" && bannerUrlRaw.trim() ? bannerUrlRaw.trim() : undefined;
+      typeof bannerUrlRaw === "string" && bannerUrlRaw.trim()
+        ? bannerUrlRaw.trim()
+        : undefined;
 
     const logoUrl =
-      typeof logoUrlRaw === "string" && logoUrlRaw.trim() ? logoUrlRaw.trim() : undefined;
+      typeof logoUrlRaw === "string" && logoUrlRaw.trim()
+        ? logoUrlRaw.trim()
+        : undefined;
 
     const qty = Number.parseInt(String(body.qty ?? "25"), 10);
     if (!Number.isFinite(qty) || qty < 1 || qty > 500) {
       return NextResponse.json({ error: "qty must be between 1 and 500" }, { status: 400 });
     }
 
-    const items = Array.isArray(body.items) ? normalizeLines(body.items) : normalizeLines(body.items);
+    const items = Array.isArray(body.items)
+      ? normalizeLines(body.items)
+      : normalizeLines(body.items);
+
     if (items.length < 24) {
       return NextResponse.json(
         { error: `Need at least 24 items. You have ${items.length}.` },
@@ -43,7 +77,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ core: generates qty unique cards (your lib decides uniqueness rules)
     const generated = createBingoPack(items, qty);
 
     const pack: BingoPack = {
@@ -57,10 +90,12 @@ export async function POST(req: Request) {
       })),
     };
 
-    const pdfBuf = await renderBingoPackPdf(pack);
+    // ✅ render PDF (stream or bytes depending on implementation)
+    const pdfOut = await renderBingoPackPdf(pack);
 
-    // base64
-    const pdfBase64 = Buffer.from(pdfBuf).toString("base64");
+    // ✅ convert to bytes
+    const ab = await toArrayBufferMaybe(pdfOut);
+    const pdfBase64 = Buffer.from(new Uint8Array(ab)).toString("base64");
 
     // roster CSV
     const csvLines = ["card_id"];
@@ -69,9 +104,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ pdfBase64, csv });
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Unknown server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message || "Unknown server error" }, { status: 500 });
   }
 }
