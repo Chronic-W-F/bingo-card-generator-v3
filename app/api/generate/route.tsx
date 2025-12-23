@@ -1,81 +1,107 @@
+// app/api/generate/route.ts
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
+import fs from "node:fs";
+import path from "node:path";
 
-import { createBingoPack } from "@/lib/bingo";
-import BingoPackPdf, { type BingoCard } from "@/pdf/BingoPackPdf";
+import BingoPackPdf from "@/pdf/BingoPackPdf";
+import { ICON_MAP } from "@/lib/iconMap";
+import { generateBingoPack } from "@/lib/bingo";
 
-export const runtime = "nodejs";
+type GenerateRequest = {
+  quantity?: number;
+  sponsorImage?: string; // "/sponsors/joes-grows.png"
+  accentColor?: string;  // "#2ecc71"
+};
 
-function normalizeLines(text: unknown) {
-  return String(text ?? "")
-    .split(/\r?\n/)
-    .map((x) => x.trim())
-    .filter(Boolean);
+function publicFileToDataUri(publicPath: string) {
+  // publicPath like "/sponsors/joes-grows.png" or "/icons/leaf.png"
+  const abs = path.join(process.cwd(), "public", publicPath.replace(/^\/+/, ""));
+  const buf = fs.readFileSync(abs);
+  const ext = path.extname(abs).toLowerCase();
+
+  const mime =
+    ext === ".png"
+      ? "image/png"
+      : ext === ".jpg" || ext === ".jpeg"
+      ? "image/jpeg"
+      : ext === ".webp"
+      ? "image/webp"
+      : "application/octet-stream";
+
+  return `data:${mime};base64,${buf.toString("base64")}`;
+}
+
+function safeTryDataUri(publicPath?: string) {
+  if (!publicPath) return undefined;
+  try {
+    return publicFileToDataUri(publicPath);
+  } catch {
+    // If it can't be read (missing file), return original string (might still work locally)
+    return publicPath;
+  }
+}
+
+function buildIconDataMap() {
+  const out: Record<string, string> = {};
+  for (const [label, publicPath] of Object.entries(ICON_MAP)) {
+    try {
+      out[label] = publicFileToDataUri(publicPath);
+    } catch {
+      // fallback to raw path if missing
+      out[label] = publicPath;
+    }
+  }
+  return out;
+}
+
+function toRosterCsv(cards: { id: string }[]) {
+  // Simple roster: Card ID per line. You can expand if you want.
+  const header = "CardID";
+  const rows = cards.map((c) => c.id);
+  return [header, ...rows].join("\n");
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = (await req.json().catch(() => ({}))) as GenerateRequest;
 
-    const packTitle = String(body?.packTitle ?? "Grower Bingo Pack").trim();
-    const sponsorName = String(body?.sponsorName ?? "Sponsor").trim();
+    const quantity = Math.max(1, Math.min(500, Number(body.quantity ?? 1)));
+    const accentColor = body.accentColor ?? "#000000";
 
-    // allow null/undefined safely
-    const bannerUrl: string | undefined =
-      typeof body?.bannerUrl === "string" && body.bannerUrl.trim()
-        ? body.bannerUrl.trim()
-        : undefined;
+    // ✅ Your existing generator (returns { cards })
+    const pack = generateBingoPack(quantity);
+    const cards = pack.cards;
 
-    const logoUrl: string | undefined =
-      typeof body?.logoUrl === "string" && body.logoUrl.trim()
-        ? body.logoUrl.trim()
-        : undefined;
+    // ✅ Convert sponsor and icons to server-safe data URIs
+    const sponsorSrc = safeTryDataUri(body.sponsorImage);
+    const iconMap = buildIconDataMap();
 
-    const qty = Number(body?.qty ?? 25);
-    const items = Array.isArray(body?.items)
-      ? body.items.map((x: any) => String(x).trim()).filter(Boolean)
-      : normalizeLines(body?.items);
-
-    if (!Number.isFinite(qty) || qty < 1 || qty > 500) {
-      return NextResponse.json({ error: "qty must be between 1 and 500" }, { status: 400 });
-    }
-
-    if (items.length < 24) {
-      return NextResponse.json({ error: `Need at least 24 items (got ${items.length})` }, { status: 400 });
-    }
-
-    // ✅ Unique-grid pack generation
-    const generated = createBingoPack(items, qty);
-
-    const cards: BingoCard[] = generated.cards.map((c) => ({
-      id: c.id,
-      grid: c.grid, // string[][]
-    }));
-
-    // ✅ Build PDF document (component returns <Document/>)
-    const doc = (
+    // ✅ Render PDF
+    const pdfBuffer = await renderToBuffer(
       <BingoPackPdf
-        packTitle={packTitle}
-        sponsorName={sponsorName}
-        bannerUrl={bannerUrl}
-        logoUrl={logoUrl}
         cards={cards}
+        sponsorImage={sponsorSrc}
+        accentColor={accentColor}
+        iconMap={iconMap}
       />
     );
 
-    // ✅ FIX: TS typing mismatch in @react-pdf/renderer
-    const pdfBuffer = await renderToBuffer(doc as any);
+    const pdfBase64 = pdfBuffer.toString("base64");
+    const csv = toRosterCsv(cards);
 
-    const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
-
-    // roster CSV (card ids)
-    const csvLines = ["card_id", ...cards.map((c) => c.id)];
-    const csv = csvLines.join("\n");
-
-    return NextResponse.json({ pdfBase64, csv });
-  } catch (e: any) {
+    return NextResponse.json({
+      ok: true,
+      pdfBase64,
+      csv,
+      cardCount: cards.length,
+    });
+  } catch (err: any) {
     return NextResponse.json(
-      { error: e?.message || "Unknown server error" },
+      {
+        ok: false,
+        error: err?.message ?? "Failed to generate bingo pack",
+      },
       { status: 500 }
     );
   }
