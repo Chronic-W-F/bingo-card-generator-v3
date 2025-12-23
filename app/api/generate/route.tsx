@@ -1,4 +1,4 @@
-// app/api/generate/route.tsx
+// app/api/generate/route.ts
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import fs from "node:fs";
@@ -7,8 +7,8 @@ import path from "node:path";
 import BingoPackPdf from "@/pdf/BingoPackPdf";
 import { ICON_MAP } from "@/lib/iconMap";
 import { createBingoPack } from "@/lib/bingo";
+import { BINGO_ITEMS } from "@/lib/bingoItems"; // <-- CHANGE if your file/name differs
 
-// ✅ Force Node runtime (prevents ReadableStream edge behavior)
 export const runtime = "nodejs";
 
 type GenerateRequest = {
@@ -41,7 +41,7 @@ function safeTryDataUri(publicPath?: string) {
   try {
     return publicFileToDataUri(publicPath);
   } catch {
-    return publicPath; // fallback (local dev might still resolve)
+    return publicPath;
   }
 }
 
@@ -68,8 +68,8 @@ export async function POST(req: Request) {
     const quantity = Math.max(1, Math.min(500, Number(body.quantity ?? 1)));
     const accentColor = body.accentColor ?? "#000000";
 
-    // ✅ Your actual export name
-    const pack = createBingoPack(quantity);
+    // ✅ FIX: createBingoPack(items, qty)
+    const pack = createBingoPack(BINGO_ITEMS, quantity);
     const cards = pack.cards;
 
     const sponsorSrc = safeTryDataUri(body.sponsorImage);
