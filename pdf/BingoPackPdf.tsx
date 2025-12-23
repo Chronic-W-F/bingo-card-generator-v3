@@ -1,4 +1,11 @@
-import { Document, Page, View, Text, StyleSheet, Image } from "@react-pdf/renderer";
+import {
+  Document,
+  Page,
+  View,
+  Text,
+  StyleSheet,
+  Image,
+} from "@react-pdf/renderer";
 import { ICON_MAP } from "@/lib/iconMap";
 
 type BingoCard = {
@@ -8,20 +15,24 @@ type BingoCard = {
 
 type Props = {
   cards: BingoCard[];
-  sponsorName?: string;
+  sponsorImage?: string; // e.g. "/sponsors/joes-grows.png"
 };
 
-export default function BingoPackPdf({ cards, sponsorName }: Props) {
+export default function BingoPackPdf({ cards, sponsorImage }: Props) {
   return (
     <Document>
       {cards.map((card) => (
         <Page size="LETTER" style={styles.page} key={card.id}>
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.title}>Grower Bingo</Text>
-            {sponsorName && (
-              <Text style={styles.sponsor}>Sponsored by {sponsorName}</Text>
+            {sponsorImage && (
+              <Image
+                src={sponsorImage}
+                style={styles.sponsorBanner}
+              />
             )}
+
+            <Text style={styles.title}>Grower Bingo</Text>
             <Text style={styles.cardId}>Card ID: {card.id}</Text>
           </View>
 
@@ -62,16 +73,19 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: 12,
     textAlign: "center",
+    alignItems: "center",
+  },
+
+  sponsorBanner: {
+    width: "100%",
+    height: 50,
+    objectFit: "contain",
+    marginBottom: 6,
   },
 
   title: {
     fontSize: 20,
     fontWeight: "bold",
-  },
-
-  sponsor: {
-    fontSize: 12,
-    marginTop: 2,
   },
 
   cardId: {
