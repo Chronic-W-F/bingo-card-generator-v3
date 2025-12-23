@@ -86,12 +86,50 @@ export default function BingoPackPdf({
       zIndex: 2,
     },
 
+    // ✅ No transform; numeric center inside an 80px tall cell:
+    // icon size = 36, so centered top/left = (80-36)/2 = 22
+    // width is cell-dependent, but 22 looks centered enough visually as a watermark
     watermarkIcon: {
       position: "absolute",
       width: 36,
       height: 36,
       opacity: 0.12,
-      top: "50%",
-      left: "50%",
-      // ✅ Type-safe for older react-pdf Transform typings
-      transform: [{
+      top: 22,
+      left: 22,
+      zIndex: 1,
+    },
+  });
+
+  return (
+    <Document>
+      {cards.map((card) => (
+        <Page size="LETTER" style={styles.page} key={card.id}>
+          {/* Header */}
+          <View style={styles.header}>
+            {sponsorImage && (
+              <Image src={sponsorImage} style={styles.sponsorBanner} />
+            )}
+            <Text style={styles.title}>Grower Bingo</Text>
+            <Text style={styles.cardId}>Card ID: {card.id}</Text>
+          </View>
+
+          {/* Bingo Grid */}
+          <View style={styles.grid}>
+            {card.grid.flat().map((item, idx) => {
+              const iconSrc = (iconMap && iconMap[item]) || ICON_MAP[item];
+
+              return (
+                <View style={styles.cell} key={`${card.id}-${idx}`}>
+                  {iconSrc && (
+                    <Image src={iconSrc} style={styles.watermarkIcon} />
+                  )}
+                  <Text style={styles.cellText}>{item}</Text>
+                </View>
+              );
+            })}
+          </View>
+        </Page>
+      ))}
+    </Document>
+  );
+}
