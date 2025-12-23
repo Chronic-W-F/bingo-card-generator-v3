@@ -1,3 +1,5 @@
+// pdf/BingoPackPdf.tsx
+import React from "react";
 import {
   Document,
   Page,
@@ -15,14 +17,16 @@ type BingoCard = {
 
 type Props = {
   cards: BingoCard[];
-  sponsorImage?: string;   // "/sponsors/joes-grows.png"
-  accentColor?: string;    // "#2ecc71"
+  sponsorImage?: string; // data URI OR "/sponsors/joes-grows.png"
+  accentColor?: string;  // "#2ecc71"
+  iconMap?: Record<string, string>; // item label -> data URI (recommended)
 };
 
 export default function BingoPackPdf({
   cards,
   sponsorImage,
   accentColor = "#000000",
+  iconMap,
 }: Props) {
   const styles = StyleSheet.create({
     page: {
@@ -89,7 +93,8 @@ export default function BingoPackPdf({
       opacity: 0.12,
       top: "50%",
       left: "50%",
-      transform: "translate(-18px, -18px)",
+      // ✅ react-pdf expects transform as an array of objects
+      transform: [{ translateX: -18 }, { translateY: -18 }],
       zIndex: 1,
     },
   });
@@ -111,16 +116,14 @@ export default function BingoPackPdf({
           {/* Bingo Grid */}
           <View style={styles.grid}>
             {card.grid.flat().map((item, idx) => {
-              const iconSrc = ICON_MAP[item];
+              // Prefer server-provided data URIs; fallback to local paths
+              const iconSrc = (iconMap && iconMap[item]) || ICON_MAP[item];
 
               return (
-                <View style={styles.cell} key={idx}>
+                <View style={styles.cell} key={`${card.id}-${idx}`}>
                   {/* Watermark Icon */}
                   {iconSrc && (
-                    <Image
-                      src={iconSrc}
-                      style={styles.watermarkIcon}
-                    />
+                    <Image src={iconSrc} style={styles.watermarkIcon} />
                   )}
 
                   {/* Cell Text */}
