@@ -1,100 +1,118 @@
-import React from "react";
-import { Document, Image, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
+import { Document, Page, View, Text, StyleSheet, Image } from "@react-pdf/renderer";
+import { ICON_MAP } from "@/lib/iconMap";
 
-export type BingoCard = {
+type BingoCard = {
   id: string;
-  grid: string[][]; // 5x5 with "FREE" at center
+  grid: string[][]; // 5x5 with FREE in center
 };
 
-export type BingoPackPdfProps = {
-  packTitle: string;
-  sponsorName: string;
-  bannerUrl?: string;
-  logoUrl?: string;
+type Props = {
   cards: BingoCard[];
+  sponsorName?: string;
 };
 
-const styles = StyleSheet.create({
-  page: { padding: 18 },
-
-  headerWrap: { marginBottom: 10 },
-  title: { fontSize: 18, fontWeight: 700 },
-  subtitle: { fontSize: 10, marginTop: 2 },
-
-  banner: { width: "100%", height: 70, objectFit: "cover" as any, marginBottom: 8 },
-
-  cardId: { fontSize: 10, marginBottom: 8 },
-
-  grid: { borderWidth: 2, borderColor: "#000" },
-  row: { flexDirection: "row" },
-
-  cellBase: {
-    flex: 1,
-    height: 72,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: "#000",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 6,
-  },
-
-  lastCol: { borderRightWidth: 0 },
-  lastRow: { borderBottomWidth: 0 },
-
-  cellText: { fontSize: 10, textAlign: "center" },
-
-  freeCell: { backgroundColor: "#eee" },
-  freeLabel: { fontSize: 10, fontWeight: 700, marginTop: 4 },
-
-  freeLogo: { width: 40, height: 40, objectFit: "contain" as any },
-});
-
-export default function BingoPackPdf(props: BingoPackPdfProps) {
-  const { packTitle, sponsorName, bannerUrl, logoUrl, cards } = props;
-
+export default function BingoPackPdf({ cards, sponsorName }: Props) {
   return (
     <Document>
       {cards.map((card) => (
-        <Page key={card.id} size="LETTER" style={styles.page}>
-          <View style={styles.headerWrap}>
-            {bannerUrl ? <Image src={bannerUrl} style={styles.banner} /> : null}
-            <Text style={styles.title}>{packTitle}</Text>
-            <Text style={styles.subtitle}>Sponsor: {sponsorName}</Text>
+        <Page size="LETTER" style={styles.page} key={card.id}>
+          {/* Header */}
+          <View style={styles.header}>
+            <Text style={styles.title}>Grower Bingo</Text>
+            {sponsorName && (
+              <Text style={styles.sponsor}>Sponsored by {sponsorName}</Text>
+            )}
+            <Text style={styles.cardId}>Card ID: {card.id}</Text>
           </View>
 
-          <Text style={styles.cardId}>Card ID: {card.id}</Text>
-
+          {/* Bingo Grid */}
           <View style={styles.grid}>
-            {card.grid.map((row, rIdx) => (
-              <View key={rIdx} style={styles.row}>
-                {row.map((cell, cIdx) => {
-                  const isFree = cell === "FREE";
+            {card.grid.flat().map((item, idx) => {
+              const iconSrc = ICON_MAP[item];
 
-                  // ✅ IMPORTANT: only push real style objects (no null/undefined)
-                  const cellStyles: any[] = [styles.cellBase];
-                  if (cIdx === 4) cellStyles.push(styles.lastCol);
-                  if (rIdx === 4) cellStyles.push(styles.lastRow);
-                  if (isFree) cellStyles.push(styles.freeCell);
+              return (
+                <View style={styles.cell} key={idx}>
+                  {/* Watermark Icon */}
+                  {iconSrc && (
+                    <Image
+                      src={iconSrc}
+                      style={styles.watermarkIcon}
+                    />
+                  )}
 
-                  return (
-                    <View key={cIdx} style={cellStyles}>
-                      {isFree ? (
-                        <>
-                          {logoUrl ? <Image src={logoUrl} style={styles.freeLogo} /> : null}
-                          <Text style={styles.freeLabel}>{sponsorName}</Text>
-                        </>
-                      ) : (
-                        <Text style={styles.cellText}>{cell}</Text>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            ))}
+                  {/* Cell Text */}
+                  <Text style={styles.cellText}>{item}</Text>
+                </View>
+              );
+            })}
           </View>
         </Page>
       ))}
     </Document>
   );
 }
+
+const styles = StyleSheet.create({
+  page: {
+    padding: 24,
+    fontSize: 10,
+    fontFamily: "Helvetica",
+  },
+
+  header: {
+    marginBottom: 12,
+    textAlign: "center",
+  },
+
+  title: {
+    fontSize: 20,
+    fontWeight: "bold",
+  },
+
+  sponsor: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  cardId: {
+    fontSize: 9,
+    marginTop: 4,
+  },
+
+  grid: {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    width: "100%",
+    borderWidth: 2,
+    borderColor: "#000",
+  },
+
+  cell: {
+    width: "20%",
+    height: 80,
+    borderWidth: 1,
+    borderColor: "#000",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 4,
+    position: "relative",
+  },
+
+  cellText: {
+    fontSize: 9,
+    textAlign: "center",
+    zIndex: 2,
+  },
+
+  watermarkIcon: {
+    position: "absolute",
+    width: 36,
+    height: 36,
+    opacity: 0.12,
+    top: "50%",
+    left: "50%",
+    transform: "translate(-18px, -18px)",
+    zIndex: 1,
+  },
+});
