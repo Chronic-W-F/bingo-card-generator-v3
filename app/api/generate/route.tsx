@@ -1,4 +1,4 @@
-// app/api/generate/route.ts
+// app/api/generate/route.tsx
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import fs from "node:fs";
@@ -6,7 +6,7 @@ import path from "node:path";
 
 import BingoPackPdf from "@/pdf/BingoPackPdf";
 import { ICON_MAP } from "@/lib/iconMap";
-import { generateBingoPack } from "@/lib/bingo";
+import { createBingoPack } from "@/lib/bingo";
 
 // ✅ Force Node runtime (prevents ReadableStream edge behavior)
 export const runtime = "nodejs";
@@ -68,7 +68,8 @@ export async function POST(req: Request) {
     const quantity = Math.max(1, Math.min(500, Number(body.quantity ?? 1)));
     const accentColor = body.accentColor ?? "#000000";
 
-    const pack = generateBingoPack(quantity);
+    // ✅ Your actual export name
+    const pack = createBingoPack(quantity);
     const cards = pack.cards;
 
     const sponsorSrc = safeTryDataUri(body.sponsorImage);
