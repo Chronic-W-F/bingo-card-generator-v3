@@ -1,4 +1,4 @@
-// app/api/generate/route.ts
+// app/api/generate/route.tsx
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import fs from "node:fs";
@@ -6,15 +6,14 @@ import path from "node:path";
 
 import BingoPackPdf from "@/pdf/BingoPackPdf";
 import { ICON_MAP } from "@/lib/iconMap";
-import { createBingoPack } from "@/lib/bingo";
-import { BINGO_ITEMS } from "@/lib/bingoItems"; // <-- CHANGE if your file/name differs
+import { createBingoPack, BINGO_ITEMS } from "@/lib/bingo";
 
 export const runtime = "nodejs";
 
 type GenerateRequest = {
   quantity?: number;
-  sponsorImage?: string; // "/sponsors/joes-grows.png"
-  accentColor?: string;  // "#2ecc71"
+  sponsorImage?: string;
+  accentColor?: string;
 };
 
 function publicFileToDataUri(publicPath: string) {
@@ -68,7 +67,6 @@ export async function POST(req: Request) {
     const quantity = Math.max(1, Math.min(500, Number(body.quantity ?? 1)));
     const accentColor = body.accentColor ?? "#000000";
 
-    // ✅ FIX: createBingoPack(items, qty)
     const pack = createBingoPack(BINGO_ITEMS, quantity);
     const cards = pack.cards;
 
