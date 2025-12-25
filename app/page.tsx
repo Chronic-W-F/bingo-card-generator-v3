@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_POOL_TEXT } from "@/lib/defaultItems";
-import { POOL_STORAGE_KEY, normalizePoolText, splitPool, countPoolItems } from "@/lib/pool";
+import { POOL_STORAGE_KEY, countPoolItems, normalizePoolText, poolTextToArray } from "@/lib/pool";
 
 type GeneratedPack = {
   pdfBase64: string;
@@ -34,7 +34,7 @@ export default function Page() {
   const [logoUrl, setLogoUrl] = useState("");
   const [qty, setQty] = useState("25");
 
-  // SHARED pool textarea
+  // Shared pool text
   const [itemsText, setItemsText] = useState(defaultItemsText);
 
   const [loading, setLoading] = useState(false);
@@ -45,8 +45,12 @@ export default function Page() {
   useEffect(() => {
     try {
       const sharedPool = localStorage.getItem(POOL_STORAGE_KEY);
-      if (sharedPool && sharedPool.trim().length > 0) {
-        setItemsText(normalizePoolText(sharedPool));
+      if (sharedPool && sharedPool.trim()) {
+        setItemsText(sharedPool);
+      } else {
+        // if nothing saved yet, seed localStorage with defaults
+        localStorage.setItem(POOL_STORAGE_KEY, defaultItemsText);
+        setItemsText(defaultItemsText);
       }
 
       const raw = localStorage.getItem(FORM_KEY);
@@ -76,10 +80,11 @@ export default function Page() {
     }
   }, [packTitle, sponsorName, bannerUrl, logoUrl, qty]);
 
-  // Persist shared pool (normalized) every time it changes
+  // Persist shared pool (normalized) whenever it changes
   useEffect(() => {
     try {
-      localStorage.setItem(POOL_STORAGE_KEY, normalizePoolText(itemsText));
+      const normalized = normalizePoolText(itemsText);
+      localStorage.setItem(POOL_STORAGE_KEY, normalized);
     } catch {
       // ignore
     }
@@ -91,7 +96,7 @@ export default function Page() {
     setError("");
     setPack(null);
 
-    const items = splitPool(itemsText);
+    const items = poolTextToArray(itemsText);
     const quantityParsed = Math.max(1, Math.min(500, Number(String(qty).trim() || "0")));
 
     if (items.length < 24) {
@@ -156,10 +161,19 @@ export default function Page() {
   function reloadSharedPool() {
     try {
       const shared = localStorage.getItem(POOL_STORAGE_KEY);
-      if (shared && shared.trim().length > 0) setItemsText(normalizePoolText(shared));
+      if (shared && shared.trim()) setItemsText(shared);
     } catch {
       // ignore
     }
+  }
+
+  function clearPool() {
+    setPack(null);
+    setError("");
+    setItemsText("");
+    try {
+      localStorage.removeItem(POOL_STORAGE_KEY);
+    } catch {}
   }
 
   return (
@@ -318,4 +332,58 @@ export default function Page() {
             cursor: pack ? "pointer" : "not-allowed",
           }}
         >
-          Download CSV (
+          Download CSV (Roster)
+        </button>
+
+        <button
+          onClick={resetPoolToDefaults}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #ccc",
+            background: "white",
+            color: "#111",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Reset pool to defaults
+        </button>
+
+        <button
+          onClick={reloadSharedPool}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #ccc",
+            background: "white",
+            color: "#111",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Reload shared pool
+        </button>
+
+        <button
+          onClick={clearPool}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #ccc",
+            background: "white",
+            color: "#111",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Clear pool
+        </button>
+      </div>
+
+      <p style={{ marginTop: 12, opacity: 0.75 }}>
+        Shared pool key: <code>{POOL_STORAGE_KEY}</code>. Edit once, both pages match.
+      </p>
+    </main>
+  );
+    }
