@@ -1,18 +1,16 @@
 // lib/caller.ts
+// Caller logic: build a deck from a pool, then draw in chunks with no repeats.
 
 export type CallerState = {
-  pool: string[];      // all available topics (deduped/trimmed)
-  deckSize: number;    // how many topics are used this game
-  drawSize: number;    // how many to call each round
-  deck: string[];      // the chosen deck (shuffled)
-  called: string[];    // everything called so far
-  remaining: string[]; // what is left to call
-  round: number;       // starts at 0, increments each draw
+  deck: string[];   // randomized deck for this game (length = deckSize)
+  called: string[]; // everything called so far (in order)
+  round: number;    // how many draws have happened
 };
 
 export type DrawResult = {
-  drawn: string[];
   state: CallerState;
+  drawn: string[];  // what was drawn this round
+  done: boolean;    // true when deck is exhausted AFTER this draw
 };
 
 function shuffle<T>(arr: T[]): T[] {
@@ -24,62 +22,50 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-function normalizePool(pool: string[]): string[] {
-  // Trim, drop blanks, and dedupe while preserving first-seen order
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of pool) {
-    const s = String(raw ?? "").trim();
-    if (!s) continue;
-    if (seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
+/**
+ * Build a randomized deck of size deckSize from the pool (no duplicates).
+ * pool should already be trimmed/unique by the caller UI if desired.
+ */
+export function buildDeck(pool: string[], deckSize: number): CallerState {
+  const cleanPool = pool.map((s) => s.trim()).filter(Boolean);
+
+  if (deckSize < 1) throw new Error("deckSize must be >= 1");
+  if (deckSize > cleanPool.length) {
+    throw new Error(`Deck size (${deckSize}) larger than pool (${cleanPool.length})`);
   }
-  return out;
+
+  const deck = shuffle(cleanPool).slice(0, deckSize);
+
+  return {
+    deck,
+    called: [],
+    round: 0,
+  };
 }
 
 /**
- * Pick a deck (unique, shuffled) from a larger pool.
- * - If deckSize >= pool size, it uses the whole pool (shuffled).
- * - No duplicates, ever.
+ * Draw the next drawSize items from the deck without repeats.
+ * Uses called.length as the pointer into the deck.
  */
-export function buildDeck(pool: string[], deckSize: number): string[] {
-  const clean = normalizePool(pool);
-  if (clean.length === 0) return [];
+export function drawNext(state: CallerState, drawSize: number): DrawResult {
+  const size = Math.max(1, Math.floor(drawSize || 1));
 
-  const size = Math.max(1, Math.min(Math.floor(deckSize || 1), clean.length));
+  const start = state.called.length;
+  const end = Math.min(state.deck.length, start + size);
+  const drawn = state.deck.slice(start, end);
 
-  // Shuffle pool, then take first N
-  const shuffled = shuffle(clean);
-  return shuffled.slice(0, size);
-}
-
-/**
- * Draw next batch (no repeats). Stops naturally when remaining is empty.
- */
-export function drawNext(state: CallerState): DrawResult {
-  if (!state) {
-    return { drawn: [], state: state as unknown as CallerState };
+  // If nothing left to draw
+  if (drawn.length === 0) {
+    return { state, drawn: [], done: true };
   }
-
-  if (state.remaining.length === 0) {
-    return { drawn: [], state };
-  }
-
-  const drawCount = Math.max(
-    1,
-    Math.min(Math.floor(state.drawSize || 1), state.remaining.length)
-  );
-
-  const drawn = state.remaining.slice(0, drawCount);
-  const remaining = state.remaining.slice(drawCount);
 
   const nextState: CallerState = {
     ...state,
     called: [...state.called, ...drawn],
-    remaining,
     round: state.round + 1,
   };
 
-  return { drawn, state: nextState };
+  const done = nextState.called.length >= nextState.deck.length;
+
+  return { state: nextState, drawn, done };
 }
