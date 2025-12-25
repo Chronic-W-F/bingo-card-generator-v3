@@ -1,242 +1,320 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { BINGO_ITEMS } from "@/lib/bingo";
-import {
-  buildDeck,
-  drawNext,
-  type CallerState,
-  type DrawResult,
-} from "@/lib/caller";
+import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_TOPIC_POOL } from "@/lib/defaultItems";
 
-function toLines(text: string): string[] {
+type CallerState = {
+  started: boolean;
+  round: number;
+  deck: string[];       // the chosen deck for THIS game (size = deckSize)
+  remaining: string[];  // what's left to draw
+  called: string[];     // what has been called so far (in order)
+  latestDraw: string[]; // last draw results
+};
+
+const LS_KEY = "grower-bingo:caller:v1";
+
+function poolToTextarea(pool: string[]) {
+  return pool.join("\n");
+}
+
+function cleanLines(text: string) {
   return text
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
 }
 
+function shuffle<T>(arr: T[]) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function buildDeckFromPool(pool: string[], deckSize: number) {
+  const unique = Array.from(new Set(pool.map((x) => x.trim()).filter(Boolean)));
+
+  if (unique.length < 1) throw new Error("Paste at least one topic.");
+  if (deckSize < 1) throw new Error("Deck size must be at least 1.");
+  if (deckSize > unique.length) {
+    throw new Error(
+      `Deck size (${deckSize}) is larger than your pool (${unique.length}). Reduce deck size or add more topics.`
+    );
+  }
+
+  // Shuffle the pool and take the first deckSize
+  const shuffled = shuffle(unique);
+  return shuffled.slice(0, deckSize);
+}
+
+function createNewGame(poolText: string, deckSize: number): CallerState {
+  const pool = cleanLines(poolText);
+  const deck = buildDeckFromPool(pool, deckSize);
+  return {
+    started: true,
+    round: 0,
+    deck,
+    remaining: shuffle(deck), // shuffle the deck order for draws
+    called: [],
+    latestDraw: [],
+  };
+}
+
+function nextDraw(state: CallerState, drawSize: number): CallerState {
+  if (!state.started) throw new Error("Start the game first.");
+  if (drawSize < 1) throw new Error("Draw size must be at least 1.");
+
+  if (state.remaining.length === 0) {
+    throw new Error("Deck exhausted — game over.");
+  }
+
+  const take = Math.min(drawSize, state.remaining.length);
+  const latest = state.remaining.slice(0, take);
+  const remaining = state.remaining.slice(take);
+  const called = [...state.called, ...latest];
+
+  return {
+    ...state,
+    round: state.round + 1,
+    latestDraw: latest,
+    remaining,
+    called,
+  };
+}
+
 export default function CallerPage() {
-  // Auto-load same items used by the Bingo Card generator
-  const [poolText, setPoolText] = useState<string>(BINGO_ITEMS.join("\n"));
-  const [deckSize, setDeckSize] = useState<number>(50);
-  const [drawSize, setDrawSize] = useState<number>(10);
+  const defaultText = useMemo(() => poolToTextarea(DEFAULT_TOPIC_POOL), []);
 
-  const [state, setState] = useState<CallerState | null>(null);
-  const [lastDraw, setLastDraw] = useState<DrawResult | null>(null);
+  const [poolText, setPoolText] = useState(defaultText);
+  const [deckSize, setDeckSize] = useState("50");
+  const [drawSize, setDrawSize] = useState("10");
+  const [error, setError] = useState("");
 
-  const poolLines = useMemo(() => toLines(poolText), [poolText]);
+  const [state, setState] = useState<CallerState>({
+    started: false,
+    round: 0,
+    deck: [],
+    remaining: [],
+    called: [],
+    latestDraw: [],
+  });
 
-  function startGame() {
-    if (poolLines.length < 1) {
-      alert("Paste at least one topic");
-      return;
+  // Load saved state (so you can leave the page and come back)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+
+      if (typeof saved.poolText === "string") setPoolText(saved.poolText);
+      if (typeof saved.deckSize === "string") setDeckSize(saved.deckSize);
+      if (typeof saved.drawSize === "string") setDrawSize(saved.drawSize);
+      if (saved.state && typeof saved.state === "object") setState(saved.state);
+    } catch {
+      // ignore
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    const safeDeckSize = Math.max(
-      1,
-      Math.min(Number.isFinite(deckSize) ? deckSize : 1, poolLines.length)
-    );
-
-    const safeDrawSize = Math.max(
-      1,
-      Math.min(Number.isFinite(drawSize) ? drawSize : 1, safeDeckSize)
-    );
-
-    const deck = buildDeck(poolLines, safeDeckSize);
-
-    const newState: CallerState = {
-      pool: poolLines,
-      deckSize: safeDeckSize,
-      drawSize: safeDrawSize,
-      deck,
-      called: [],
-      remaining: deck.slice(),
-      round: 0,
-    };
-
-    setState(newState);
-    setLastDraw(null);
-  }
-
-  function nextDraw() {
-    if (!state) return;
-
-    // If nothing left, do nothing
-    if (state.remaining.length === 0) {
-      alert("Deck exhausted — game over.");
-      return;
+  // Persist
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({ poolText, deckSize, drawSize, state })
+      );
+    } catch {
+      // ignore
     }
+  }, [poolText, deckSize, drawSize, state]);
 
-    const result = drawNext(state);
-    setState(result.state);
-    setLastDraw(result);
+  const poolCount = useMemo(() => cleanLines(poolText).length, [poolText]);
+
+  const parsedDeckSize = Math.max(1, Math.floor(Number(deckSize || "0")));
+  const parsedDrawSize = Math.max(1, Math.floor(Number(drawSize || "0")));
+
+  function onLoadDefaults() {
+    setError("");
+    setPoolText(defaultText);
   }
 
-  function resetGame() {
-    setState(null);
-    setLastDraw(null);
-  }
-
-  function resetToDefaults() {
-    setPoolText(BINGO_ITEMS.join("\n"));
-  }
-
-  function clearPool() {
+  function onClear() {
+    setError("");
     setPoolText("");
   }
 
+  function onStart() {
+    setError("");
+    try {
+      const newGame = createNewGame(poolText, parsedDeckSize);
+      setState(newGame);
+    } catch (e: any) {
+      setError(e?.message || "Could not start game.");
+    }
+  }
+
+  function onReset() {
+    setError("");
+    setState({
+      started: false,
+      round: 0,
+      deck: [],
+      remaining: [],
+      called: [],
+      latestDraw: [],
+    });
+  }
+
+  function onNextDraw() {
+    setError("");
+    try {
+      const updated = nextDraw(state, parsedDrawSize);
+      setState(updated);
+    } catch (e: any) {
+      setError(e?.message || "Could not draw.");
+      // If deck is exhausted, keep state visible
+    }
+  }
+
+  async function onCopyLatestDraw() {
+    setError("");
+    const lines = state.latestDraw.map((x, i) => `${i + 1}. ${x}`).join("\n");
+    try {
+      await navigator.clipboard.writeText(lines);
+    } catch {
+      // fallback
+      const el = document.createElement("textarea");
+      el.value = lines;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      el.remove();
+    }
+  }
+
   return (
-    <main className="min-h-screen p-6">
-      <div className="mx-auto max-w-3xl space-y-6">
-        <h1 className="text-3xl font-bold">Grower Bingo — Caller</h1>
+    <main style={{ padding: 20, maxWidth: 900, margin: "0 auto", fontFamily: "system-ui" }}>
+      <h1 style={{ fontSize: 44, margin: "0 0 12px" }}>Grower Bingo — Caller</h1>
 
-        <div className="rounded-lg border p-4 space-y-3">
-          <label className="block text-sm font-medium">
-            Topic Pool (one per line)
-          </label>
+      {error ? (
+        <div
+          style={{
+            margin: "12px 0",
+            padding: 12,
+            borderRadius: 8,
+            background: "#ffe9e9",
+            border: "1px solid #ffb3b3",
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
 
-          <textarea
-            className="w-full rounded border p-2 font-mono text-sm"
-            rows={6}
-            value={poolText}
-            onChange={(e) => setPoolText(e.target.value)}
-            placeholder="Paste topics here..."
-          />
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ flex: "1 1 360px" }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>
+            Topic Pool (one per line) — Current: {poolCount}
+          </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="rounded border px-3 py-2 text-sm"
-              onClick={resetToDefaults}
-              type="button"
-            >
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <button onClick={onLoadDefaults} style={{ padding: "8px 10px" }}>
               Load defaults
             </button>
-            <button
-              className="rounded border px-3 py-2 text-sm"
-              onClick={clearPool}
-              type="button"
-            >
+            <button onClick={onClear} style={{ padding: "8px 10px" }}>
               Clear
             </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="block text-sm font-medium">Deck size</label>
-              <input
-                className="w-full rounded border p-2"
-                type="number"
-                min={1}
-                max={poolLines.length || 9999}
-                value={deckSize}
-                onChange={(e) => setDeckSize(Number(e.target.value))}
-              />
-              <p className="text-xs opacity-70">
-                How many items to pull from the pool for this game.
-              </p>
-            </div>
+          <textarea
+            value={poolText}
+            onChange={(e) => setPoolText(e.target.value)}
+            rows={12}
+            placeholder="Paste topics here..."
+            style={{
+              width: "100%",
+              padding: 10,
+              borderRadius: 8,
+              border: "1px solid #ccc",
+              fontFamily: "monospace",
+              whiteSpace: "pre",
+            }}
+          />
+        </div>
 
-            <div className="space-y-1">
-              <label className="block text-sm font-medium">Draw size</label>
-              <input
-                className="w-full rounded border p-2"
-                type="number"
-                min={1}
-                max={deckSize}
-                value={drawSize}
-                onChange={(e) => setDrawSize(Number(e.target.value))}
-              />
-              <p className="text-xs opacity-70">
-                How many to call each time you press “Next draw”.
-              </p>
-            </div>
+        <div style={{ flex: "1 1 320px" }}>
+          <label style={{ display: "block", fontWeight: 700 }}>Deck size</label>
+          <input
+            value={deckSize}
+            onChange={(e) => setDeckSize(e.target.value)}
+            inputMode="numeric"
+            style={{ width: 160, padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+          />
+          <div style={{ margin: "6px 0 14px", opacity: 0.7 }}>
+            How many items to pull from the pool for this game.
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="rounded bg-black px-4 py-2 text-white"
-              onClick={startGame}
-              type="button"
-            >
+          <label style={{ display: "block", fontWeight: 700 }}>Draw size</label>
+          <input
+            value={drawSize}
+            onChange={(e) => setDrawSize(e.target.value)}
+            inputMode="numeric"
+            style={{ width: 160, padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+          />
+          <div style={{ margin: "6px 0 14px", opacity: 0.7 }}>
+            How many to call each time you press “Next draw”.
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={onStart} style={{ padding: "10px 12px" }}>
               Start Game
             </button>
-
-            <button
-              className="rounded border px-4 py-2"
-              onClick={resetGame}
-              type="button"
-              disabled={!state}
-            >
+            <button onClick={onReset} style={{ padding: "10px 12px" }}>
               Reset
             </button>
-
-            <button
-              className="rounded bg-black px-4 py-2 text-white"
-              onClick={nextDraw}
-              type="button"
-              disabled={!state}
-            >
+            <button onClick={onNextDraw} style={{ padding: "10px 12px" }}>
               Next draw
             </button>
           </div>
-        </div>
 
-        {state && (
-          <div className="rounded-lg border p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm">
-                <span className="font-medium">Round:</span> {state.round}
-              </div>
-              <div className="text-sm">
-                <span className="font-medium">Called:</span> {state.called.length}{" "}
-                / {state.deckSize}
-              </div>
-              <div className="text-sm">
-                <span className="font-medium">Remaining:</span>{" "}
-                {state.remaining.length}
-              </div>
-            </div>
-
-            {lastDraw && (
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold">
-                  Latest draw (Round {lastDraw.state.round})
-                </h2>
-
-                <ol className="list-decimal pl-6">
-                  {lastDraw.drawn.map((x) => (
-                    <li key={x} className="py-0.5">
-                      {x}
-                    </li>
-                  ))}
-                </ol>
-
-                <button
-                  className="rounded border px-3 py-2 text-sm"
-                  type="button"
-                  onClick={() => {
-                    const text =
-                      `🎱 Grower Bingo Calls — Round ${lastDraw.state.round}\n\n` +
-                      lastDraw.drawn.map((x) => `• ${x}`).join("\n");
-                    navigator.clipboard.writeText(text);
-                    alert("Copied calls to clipboard.");
-                  }}
-                >
-                  Copy latest draw
-                </button>
-              </div>
-            )}
-
-            {!lastDraw && (
-              <p className="text-sm opacity-80">
-                Game started. Press <span className="font-medium">Next draw</span>{" "}
-                to call items.
-              </p>
-            )}
+          <div style={{ marginTop: 14, lineHeight: 1.6 }}>
+            <div><b>Round:</b> {state.started ? state.round : 0}</div>
+            <div><b>Called:</b> {state.called.length} / {state.deck.length || parsedDeckSize}</div>
+            <div><b>Remaining:</b> {state.remaining.length}</div>
           </div>
-        )}
+        </div>
       </div>
+
+      <hr style={{ margin: "18px 0" }} />
+
+      <h2 style={{ fontSize: 30, margin: "0 0 10px" }}>
+        Latest draw {state.started ? `(Round ${state.round})` : ""}
+      </h2>
+
+      {state.latestDraw.length ? (
+        <>
+          <ol style={{ fontSize: 22, marginTop: 0 }}>
+            {state.latestDraw.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
+
+          <button onClick={onCopyLatestDraw} style={{ padding: "10px 12px" }}>
+            Copy latest draw
+          </button>
+        </>
+      ) : (
+        <div style={{ opacity: 0.7 }}>
+          Start the game, then press “Next draw” to generate your calls.
+        </div>
+      )}
+
+      <p style={{ marginTop: 18, opacity: 0.75 }}>
+        Defaults are shared from <code>lib/defaultItems.ts</code>. Update that one file and both the
+        generator + caller stay in sync.
+      </p>
     </main>
   );
-}
+        }
