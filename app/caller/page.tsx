@@ -3,131 +3,101 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_POOL_TEXT } from "@/lib/defaultItems";
-import { POOL_STORAGE_KEY, countPoolItems, normalizePoolText, poolTextToArray } from "@/lib/pool";
-
-type CallerState = {
-  started: boolean;
-  deck: string[];   // fixed shuffled deck for this game
-  called: string[]; // what has been called so far
-  round: number;
-};
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+import { POOL_STORAGE_KEY, countPoolItems, normalizePoolText, textToPool } from "@/lib/pool";
+import { CallerState, startGame, nextDraw } from "@/lib/caller";
 
 export default function CallerPage() {
-  const defaultText = useMemo(() => DEFAULT_POOL_TEXT, []);
+  const [poolText, setPoolText] = useState<string>("");
+  const [deckSize, setDeckSize] = useState<string>("50");
+  const [drawSize, setDrawSize] = useState<string>("10");
 
-  const [poolText, setPoolText] = useState<string>(defaultText);
-  const [deckSize, setDeckSize] = useState<number>(50);
-  const [drawSize, setDrawSize] = useState<number>(10);
-
-  const [state, setState] = useState<CallerState>({
-    started: false,
-    deck: [],
-    called: [],
-    round: 0,
-  });
-
-  const [latestDraw, setLatestDraw] = useState<string[]>([]);
-  const poolCount = useMemo(() => countPoolItems(poolText), [poolText]);
-  const poolArr = useMemo(() => poolTextToArray(poolText), [poolText]);
-
-  const deckTooBig = deckSize > poolArr.length;
+  const [state, setState] = useState<CallerState>({ started: false, deck: [], called: [], round: 0 });
+  const [latest, setLatest] = useState<string[]>([]);
+  const [error, setError] = useState<string>("");
 
   // Load shared pool on mount
   useEffect(() => {
     try {
       const shared = localStorage.getItem(POOL_STORAGE_KEY);
-      if (shared && shared.trim()) {
-        setPoolText(shared);
-      } else {
-        localStorage.setItem(POOL_STORAGE_KEY, defaultText);
-        setPoolText(defaultText);
-      }
+      if (shared && shared.trim().length > 0) setPoolText(shared);
+      else setPoolText(DEFAULT_POOL_TEXT);
     } catch {
-      // ignore
+      setPoolText(DEFAULT_POOL_TEXT);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist shared pool whenever edited (normalized)
+  // Persist shared pool whenever edited
   useEffect(() => {
     try {
       localStorage.setItem(POOL_STORAGE_KEY, normalizePoolText(poolText));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [poolText]);
 
+  const poolCount = useMemo(() => countPoolItems(poolText), [poolText]);
+
   function loadDefaults() {
-    setPoolText(defaultText);
+    setPoolText(DEFAULT_POOL_TEXT);
+    setError("");
+    setLatest([]);
+    setState({ started: false, deck: [], called: [], round: 0 });
     try {
-      localStorage.setItem(POOL_STORAGE_KEY, defaultText);
+      localStorage.setItem(POOL_STORAGE_KEY, DEFAULT_POOL_TEXT);
     } catch {}
   }
 
   function reloadSharedPool() {
     try {
       const shared = localStorage.getItem(POOL_STORAGE_KEY);
-      if (shared && shared.trim()) setPoolText(shared);
-    } catch {
-      // ignore
-    }
+      if (shared != null) setPoolText(shared);
+    } catch {}
   }
 
   function clearPool() {
     setPoolText("");
+    setError("");
+    setLatest([]);
+    setState({ started: false, deck: [], called: [], round: 0 });
     try {
-      localStorage.removeItem(POOL_STORAGE_KEY);
+      localStorage.setItem(POOL_STORAGE_KEY, "");
     } catch {}
   }
 
-  function startGame() {
-    if (poolArr.length === 0) return;
+  function onStart() {
+    setError("");
+    setLatest([]);
 
-    const size = Math.max(1, Math.min(poolArr.length, Number(deckSize) || 1));
-    const deck = shuffle(poolArr).slice(0, size);
+    const pool = textToPool(poolText);
+    const ds = Math.max(1, Number(deckSize || "0"));
+    const dr = Math.max(1, Number(drawSize || "0"));
 
-    setState({
-      started: true,
-      deck,
-      called: [],
-      round: 0,
-    });
-    setLatestDraw([]);
-  }
-
-  function resetGame() {
-    setState({ started: false, deck: [], called: [], round: 0 });
-    setLatestDraw([]);
-  }
-
-  function nextDraw() {
-    if (!state.started) return;
-
-    const remaining = state.deck.filter((x) => !state.called.includes(x));
-    if (remaining.length === 0) {
-      setLatestDraw([]);
+    if (pool.length === 0) {
+      setError("Pool is empty. Paste items or click Load defaults.");
+      return;
+    }
+    if (ds > pool.length) {
+      setError(`Deck size (${ds}) is larger than your pool (${pool.length}). Reduce deck size or add more topics.`);
+      return;
+    }
+    if (dr <= 0) {
+      setError("Draw size must be 1 or more.");
       return;
     }
 
-    const n = Math.max(1, Math.min(remaining.length, Number(drawSize) || 1));
-    const draw = remaining.slice(0, n);
+    setState(startGame(pool, ds));
+  }
 
-    setState((prev) => ({
-      ...prev,
-      called: [...prev.called, ...draw],
-      round: prev.round + 1,
-    }));
+  function onReset() {
+    setError("");
+    setLatest([]);
+    setState({ started: false, deck: [], called: [], round: 0 });
+  }
 
-    setLatestDraw(draw);
+  function onNextDraw() {
+    setError("");
+    const dr = Math.max(1, Number(drawSize || "0"));
+    const result = nextDraw(state, dr);
+    setState(result.state);
+    setLatest(result.latest);
   }
 
   const calledCount = state.started ? state.called.length : 0;
@@ -135,21 +105,15 @@ export default function CallerPage() {
 
   return (
     <main className="mx-auto max-w-3xl p-4 md:p-8">
-      {/* HEADER */}
       <div className="mb-6 rounded-lg border p-4 space-y-3">
         <h1 className="text-3xl font-bold">Grower Bingo — Caller</h1>
 
         <div className="flex flex-wrap gap-2">
           <Link href="/">
-            <button className="rounded-lg border px-4 py-2 font-bold bg-black text-white">
-              ← Back to Generator
-            </button>
+            <button className="rounded-md border px-3 py-2 font-semibold">⬅ Back to Generator</button>
           </Link>
 
-          <button
-            onClick={reloadSharedPool}
-            className="rounded-lg border px-4 py-2 font-bold"
-          >
+          <button onClick={reloadSharedPool} className="rounded-md border px-3 py-2 font-semibold">
             Reload shared pool
           </button>
         </div>
@@ -159,47 +123,37 @@ export default function CallerPage() {
         </p>
       </div>
 
-      {deckTooBig ? (
-        <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm">
-          Deck size ({deckSize}) is larger than your pool ({poolArr.length}). Reduce deck size or add more topics.
+      {error ? (
+        <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-red-900">
+          {error}
         </div>
       ) : null}
 
-      {/* POOL EDITOR */}
-      <div className="rounded-lg border p-4 space-y-3">
-        <div className="font-bold">
-          Topic Pool (one per line) — Current: {poolCount}
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button onClick={loadDefaults} className="rounded border px-3 py-2">
-            Load defaults
-          </button>
-          <button onClick={reloadSharedPool} className="rounded border px-3 py-2">
-            Reload shared pool
-          </button>
-          <button onClick={clearPool} className="rounded border px-3 py-2">
-            Clear pool
-          </button>
-        </div>
-
-        <textarea
-          value={poolText}
-          onChange={(e) => setPoolText(e.target.value)}
-          rows={10}
-          className="w-full rounded border p-2 font-mono"
-        />
+      <div className="mb-3 font-semibold">
+        Topic Pool (one per line) — Current: {poolCount}
       </div>
 
-      {/* SETTINGS */}
-      <div className="mt-6 rounded-lg border p-4 space-y-4">
+      <div className="flex flex-wrap gap-2 mb-2">
+        <button onClick={loadDefaults} className="rounded-md border px-3 py-2">Load defaults</button>
+        <button onClick={reloadSharedPool} className="rounded-md border px-3 py-2">Reload shared pool</button>
+        <button onClick={clearPool} className="rounded-md border px-3 py-2">Clear pool</button>
+      </div>
+
+      <textarea
+        value={poolText}
+        onChange={(e) => setPoolText(e.target.value)}
+        rows={10}
+        className="w-full rounded-md border p-2 font-mono"
+      />
+
+      <div className="mt-4 grid gap-3">
         <div>
           <div className="font-semibold">Deck size</div>
           <input
             value={deckSize}
-            onChange={(e) => setDeckSize(Number(e.target.value))}
+            onChange={(e) => setDeckSize(e.target.value)}
             inputMode="numeric"
-            className="mt-1 w-40 rounded border p-2"
+            className="w-full rounded-md border p-2"
           />
           <div className="text-sm opacity-70">Must be ≤ pool count.</div>
         </div>
@@ -208,70 +162,56 @@ export default function CallerPage() {
           <div className="font-semibold">Draw size</div>
           <input
             value={drawSize}
-            onChange={(e) => setDrawSize(Number(e.target.value))}
+            onChange={(e) => setDrawSize(e.target.value)}
             inputMode="numeric"
-            className="mt-1 w-40 rounded border p-2"
+            className="w-full rounded-md border p-2"
           />
           <div className="text-sm opacity-70">
             How many to call each time you press “Next draw”.
           </div>
         </div>
 
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={startGame}
-            disabled={deckTooBig || poolArr.length === 0}
-            className="rounded border px-4 py-2"
-          >
+        <div className="flex flex-wrap gap-2">
+          <button onClick={onStart} className="rounded-md border px-4 py-2 font-semibold" disabled={state.started}>
             Start Game
           </button>
-          <button onClick={resetGame} className="rounded border px-4 py-2">
+          <button onClick={onReset} className="rounded-md border px-4 py-2 font-semibold">
             Reset
           </button>
-          <button
-            onClick={nextDraw}
-            disabled={!state.started}
-            className="rounded border px-4 py-2"
-          >
+          <button onClick={onNextDraw} className="rounded-md border px-4 py-2 font-semibold" disabled={!state.started}>
             Next draw
           </button>
         </div>
 
-        <div className="space-y-1">
-          <div className="font-bold">Round: {state.round}</div>
-          <div className="font-bold">Called: {calledCount} / {state.deck.length || deckSize}</div>
-          <div className="font-bold">Remaining: {remainingCount}</div>
+        <div className="mt-2 space-y-1">
+          <div className="font-semibold">Round: {state.round}</div>
+          <div className="font-semibold">Called: {calledCount} / {state.deck.length || Number(deckSize || 0)}</div>
+          <div className="font-semibold">Remaining: {remainingCount}</div>
         </div>
-      </div>
 
-      {/* LATEST DRAW */}
-      <div className="mt-6 rounded-lg border p-4">
-        <div className="font-bold mb-2">Latest draw</div>
-        {latestDraw.length === 0 ? (
-          <div className="opacity-70 text-sm">No draw yet.</div>
-        ) : (
-          <ul className="list-disc pl-5">
-            {latestDraw.map((x) => (
-              <li key={x}>{x}</li>
-            ))}
-          </ul>
-        )}
-      </div>
+        <div className="mt-3">
+          <div className="font-semibold">Latest draw</div>
+          {latest.length ? (
+            <ul className="list-disc pl-6">
+              {latest.map((x) => (
+                <li key={x}>{x}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="opacity-70">No draw yet.</div>
+          )}
+        </div>
 
-      {/* CALLED LIST */}
-      <div className="mt-6 rounded-lg border p-4">
-        <div className="font-bold mb-2">All called so far</div>
-        {state.called.length === 0 ? (
-          <div className="opacity-70 text-sm">Nothing called yet.</div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-sm">
-            {state.called.map((x, i) => (
-              <div key={`${x}-${i}`} className="rounded border px-2 py-1">
-                {i + 1}. {x}
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="mt-3">
+          <div className="font-semibold">All called so far</div>
+          {state.called.length ? (
+            <div className="whitespace-pre-wrap rounded-md border p-2 font-mono">
+              {state.called.join(", ")}
+            </div>
+          ) : (
+            <div className="opacity-70">Nothing called yet.</div>
+          )}
+        </div>
       </div>
     </main>
   );
