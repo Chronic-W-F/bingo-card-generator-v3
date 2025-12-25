@@ -17,17 +17,42 @@ type BingoCard = {
 
 type Props = {
   cards: BingoCard[];
-  sponsorImage?: string; // data URI recommended, but can be "/sponsors/..."
-  accentColor?: string;  // "#2ecc71"
+
+  /**
+   * Newer API route props (preferred)
+   */
+  title?: string;
+  sponsorName?: string;
+  bannerImageUrl?: string | null;   // top banner
+  sponsorLogoUrl?: string | null;   // reserved for future center-logo logic if you want
+
+  /**
+   * Backwards compatible (older prop name)
+   */
+  sponsorImage?: string;            // top banner (older name)
+
+  accentColor?: string;             // "#2ecc71"
   iconMap?: Record<string, string>; // item -> data URI (recommended)
 };
 
 export default function BingoPackPdf({
   cards,
+
+  // New props
+  title,
+  sponsorName,
+  bannerImageUrl,
+  sponsorLogoUrl, // currently unused, but kept so your route can pass it safely
+
+  // Old prop
   sponsorImage,
+
   accentColor = "#000000",
   iconMap,
 }: Props) {
+  // Prefer new bannerImageUrl, fall back to sponsorImage
+  const bannerSrc = bannerImageUrl || sponsorImage || null;
+
   const styles = StyleSheet.create({
     page: {
       padding: 24,
@@ -52,6 +77,13 @@ export default function BingoPackPdf({
       fontSize: 20,
       fontWeight: "bold",
       color: accentColor,
+    },
+
+    subTitle: {
+      fontSize: 10,
+      marginTop: 2,
+      color: accentColor,
+      opacity: 0.9,
     },
 
     cardId: {
@@ -100,16 +132,25 @@ export default function BingoPackPdf({
     },
   });
 
+  const displayTitle = (title && title.trim()) ? title.trim() : "Grower Bingo";
+  const displaySponsor = (sponsorName && sponsorName.trim()) ? sponsorName.trim() : "";
+
   return (
     <Document>
       {cards.map((card) => (
         <Page size="LETTER" style={styles.page} key={card.id}>
           {/* Header */}
           <View style={styles.header}>
-            {sponsorImage && (
-              <Image src={sponsorImage} style={styles.sponsorBanner} />
-            )}
-            <Text style={styles.title}>Grower Bingo</Text>
+            {bannerSrc ? (
+              <Image src={bannerSrc} style={styles.sponsorBanner} />
+            ) : null}
+
+            <Text style={styles.title}>{displayTitle}</Text>
+
+            {displaySponsor ? (
+              <Text style={styles.subTitle}>{displaySponsor}</Text>
+            ) : null}
+
             <Text style={styles.cardId}>Card ID: {card.id}</Text>
           </View>
 
@@ -120,9 +161,9 @@ export default function BingoPackPdf({
 
               return (
                 <View style={styles.cell} key={`${card.id}-${idx}`}>
-                  {iconSrc && (
+                  {iconSrc ? (
                     <Image src={iconSrc} style={styles.watermarkIcon} />
-                  )}
+                  ) : null}
                   <Text style={styles.cellText}>{item}</Text>
                 </View>
               );
