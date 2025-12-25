@@ -1,40 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-
-export default function Page() {
-  return (
-    <main className="mx-auto max-w-3xl p-4 md:p-8">
-      {/* HEADER + NAV */}
-      <div className="mb-6 rounded-lg border p-4 space-y-3">
-        <h1 className="text-3xl font-bold">Grower Bingo Generator</h1>
-
-        <div className="flex flex-wrap gap-2">
-          <Link href="/caller">
-            <Button type="button">Open Caller</Button>
-          </Link>
-
-          <a href="/caller" target="_blank" rel="noreferrer">
-            <Button type="button" variant="outline">
-              Open Caller (new tab)
-            </Button>
-          </a>
-        </div>
-
-        <p className="text-sm opacity-80">
-          Generate bingo cards here.  
-          Use the Caller page to draw items over multiple days with no repeats.
-        </p>
-      </div>
-
-      {/* YOUR EXISTING GENERATOR UI STAYS BELOW */}
-      {/* Nothing here was changed intentionally */}
-    </main>
-  );
-}
-"use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_TOPIC_POOL } from "@/lib/defaultItems";
 
@@ -47,7 +13,6 @@ type GeneratedPack = {
 
 const FORM_KEY = "grower-bingo:form:v2";
 
-/** Convert shared array into textarea format */
 function poolToTextarea(pool: string[]) {
   return pool.join("\n");
 }
@@ -84,7 +49,6 @@ export default function Page() {
   const [pack, setPack] = useState<GeneratedPack | null>(null);
   const [error, setError] = useState<string>("");
 
-  // Load saved form
   useEffect(() => {
     try {
       const raw = localStorage.getItem(FORM_KEY);
@@ -103,7 +67,6 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist form
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -154,7 +117,6 @@ export default function Page() {
 
       const data = (await res.json()) as GeneratedPack;
 
-      // Download PDF immediately
       const pdfBytes = Uint8Array.from(atob(data.pdfBase64), (c) => c.charCodeAt(0));
       downloadBlob(
         `${packTitle || "bingo-pack"}.pdf`,
@@ -183,6 +145,35 @@ export default function Page() {
 
   return (
     <main style={{ padding: 20, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
+      {/* NAV */}
+      <div
+        style={{
+          marginBottom: 14,
+          padding: 12,
+          borderRadius: 10,
+          border: "1px solid #ddd",
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ fontWeight: 800, fontSize: 18 }}>Grower Bingo Generator</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link href="/caller" style={{ textDecoration: "none" }}>
+            <button style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #111", background: "#111", color: "#fff", fontWeight: 800 }}>
+              Open Caller
+            </button>
+          </Link>
+          <a href="/caller" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+            <button style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #111", background: "#fff", color: "#111", fontWeight: 800 }}>
+              Caller (new tab)
+            </button>
+          </a>
+        </div>
+      </div>
+
       <h1 style={{ fontSize: 36, marginBottom: 10 }}>Grower Bingo Generator</h1>
 
       {error ? (
@@ -310,8 +301,7 @@ export default function Page() {
       </div>
 
       <p style={{ marginTop: 12, opacity: 0.75 }}>
-        Note: The default pool is now shared from <code>lib/defaultItems.ts</code>. Update it once,
-        and both the generator + caller can use it.
+        Default pool is shared from <code>lib/defaultItems.ts</code>.
       </p>
     </main>
   );
