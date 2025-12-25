@@ -1,14 +1,35 @@
-// lib/defaultItems.ts
-// Single source of truth for the default pool used by BOTH:
-// - PDF Generator (home page)
-// - Caller page (/caller)
+// lib/pool.ts
+export const POOL_STORAGE_KEY = "grower-bingo:pool:v1";
 
-import { BINGO_ITEMS } from "@/lib/bingo";
+export function normalizePoolText(text: string): string {
+  // Normalize newlines + trim lines + remove empties + de-dupe (case-insensitive)
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
 
-// Primary exports (new standard)
-export const DEFAULT_POOL: string[] = BINGO_ITEMS;
-export const DEFAULT_POOL_TEXT: string = BINGO_ITEMS.join("\n");
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(line);
+    }
+  }
 
-// Backwards compatibility (prevents build breaks)
-export const DEFAULT_TOPIC_POOL: string[] = DEFAULT_POOL;
-export const DEFAULT_ITEMS = DEFAULT_POOL_TEXT;
+  return out.join("\n");
+}
+
+export function splitPool(text: string): string[] {
+  return normalizePoolText(text)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+export function countPoolItems(text: string): number {
+  return splitPool(text).length;
+}
