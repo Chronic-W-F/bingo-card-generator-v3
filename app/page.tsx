@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_TOPIC_POOL } from "@/lib/defaultItems";
 
 type GeneratedPack = {
   pdfBase64: string;
@@ -11,304 +12,272 @@ type GeneratedPack = {
 
 const FORM_KEY = "grower-bingo:form:v2";
 
-const DEFAULT_ITEMS = `Trellis net
-Lollipop
-Defoliate
-Stretch week
-Dryback
-Runoff EC
-VPD off
-Heat stress
-Herm watch
-Foxtails
-Amber trichomes
-Cloudy trichomes
-Flush debate
-Leaf taco
-Stunted growth
-Light burn
-Cal-Mag
-pH swing
-Overwatered
-Underwatered
-Powdery mildew
-Fungus gnats
-Bud rot
-Nute lockout
-Late flower fade`;
+/** Convert shared array into textarea format */
+function poolToTextarea(pool: string[]) {
+  return pool.join("\n");
+}
 
 function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   URL.revokeObjectURL(url);
 }
 
-function safeFileName(s: string) {
-  return (
-    s.trim().replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").slice(0, 80) || "bingo_pack"
-  );
+function cleanLines(text: string) {
+  return text
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
-function normalizeLines(text: string) {
-  return text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-}
+export default function Page() {
+  const defaultItemsText = useMemo(() => poolToTextarea(DEFAULT_TOPIC_POOL), []);
 
-function cleanNumericString(v: unknown) {
-  return String(v ?? "").replace(/[^\d]/g, "");
-}
-
-function parseQty(v: unknown) {
-  const cleaned = cleanNumericString(v);
-  const n = Number.parseInt(cleaned, 10);
-  return { cleaned, n };
-}
-
-function buildRequestKey(payload: any) {
-  return JSON.stringify(payload);
-}
-
-async function safeJsonFetch(input: RequestInfo, init?: RequestInit) {
-  const res = await fetch(input, init);
-  const text = await res.text();
-
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error(text || `Server returned empty response (HTTP ${res.status}).`);
-  }
-
-  if (!res.ok) throw new Error(data?.error || data?.message || `Request failed (HTTP ${res.status}).`);
-  return data;
-}
-
-export default function HomePage() {
   const [packTitle, setPackTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
   const [bannerUrl, setBannerUrl] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
+  const [qty, setQty] = useState("25");
+  const [itemsText, setItemsText] = useState(defaultItemsText);
 
-  const [qty, setQty] = useState<string>("25");
-  const [items, setItems] = useState<string>(DEFAULT_ITEMS);
-
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [pack, setPack] = useState<GeneratedPack | null>(null);
+  const [error, setError] = useState<string>("");
 
+  // Load saved form
   useEffect(() => {
     try {
       const raw = localStorage.getItem(FORM_KEY);
       if (!raw) return;
-      const f = JSON.parse(raw);
+      const saved = JSON.parse(raw);
 
-      if (typeof f.packTitle === "string") setPackTitle(f.packTitle);
-      if (typeof f.sponsorName === "string") setSponsorName(f.sponsorName);
-      if (typeof f.bannerUrl === "string") setBannerUrl(f.bannerUrl);
-      if (typeof f.logoUrl === "string") setLogoUrl(f.logoUrl);
-
-      if (f.qty !== undefined) {
-        const { cleaned, n } = parseQty(f.qty);
-        setQty(cleaned || (Number.isFinite(n) ? String(n) : "25"));
-      }
-
-      if (typeof f.items === "string") setItems(f.items);
-    } catch {}
+      if (typeof saved.packTitle === "string") setPackTitle(saved.packTitle);
+      if (typeof saved.sponsorName === "string") setSponsorName(saved.sponsorName);
+      if (typeof saved.bannerUrl === "string") setBannerUrl(saved.bannerUrl);
+      if (typeof saved.logoUrl === "string") setLogoUrl(saved.logoUrl);
+      if (typeof saved.qty === "string") setQty(saved.qty);
+      if (typeof saved.itemsText === "string") setItemsText(saved.itemsText);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Persist form
   useEffect(() => {
     try {
       localStorage.setItem(
         FORM_KEY,
-        JSON.stringify({ packTitle, sponsorName, bannerUrl, logoUrl, qty, items })
+        JSON.stringify({ packTitle, sponsorName, bannerUrl, logoUrl, qty, itemsText })
       );
-    } catch {}
-  }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items]);
-
-  useEffect(() => {
-    setErr(null);
-  }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, items]);
-
-  const itemsList = useMemo(() => normalizeLines(items), [items]);
-  const { cleaned: qtyCleaned, n: qtyNumParsed } = useMemo(() => parseQty(qty), [qty]);
-
-  const currentRequestKey = useMemo(() => {
-    const safeQty = Number.isFinite(qtyNumParsed) ? qtyNumParsed : 0;
-    return buildRequestKey({
-      packTitle: packTitle.trim(),
-      sponsorName: sponsorName.trim(),
-      bannerUrl: bannerUrl.trim(),
-      logoUrl: logoUrl.trim(),
-      qty: safeQty,
-      items: itemsList,
-    });
-  }, [packTitle, sponsorName, bannerUrl, logoUrl, qtyNumParsed, itemsList]);
-
-  const packIsFresh = pack?.requestKey === currentRequestKey;
-
-  function validateInputs(): { qtyNum: number; itemsArr: string[] } | null {
-    const qtyNum = qtyNumParsed;
-
-    if (!Number.isFinite(qtyNum) || !Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > 500) {
-      setErr("Quantity must be between 1 and 500.");
-      return null;
+    } catch {
+      // ignore
     }
+  }, [packTitle, sponsorName, bannerUrl, logoUrl, qty, itemsText]);
 
-    if (itemsList.length < 24) {
-      setErr(`Need at least 24 square items (you have ${itemsList.length}).`);
-      return null;
-    }
+  const itemCount = useMemo(() => cleanLines(itemsText).length, [itemsText]);
 
-    return { qtyNum, itemsArr: itemsList };
-  }
+  async function generatePack() {
+    setError("");
+    setPack(null);
 
-  async function generatePack(): Promise<GeneratedPack> {
-    const validated = validateInputs();
-    if (!validated) throw new Error("Invalid inputs.");
+    const items = cleanLines(itemsText);
+    const quantityParsed = Math.max(1, Math.min(500, Number(String(qty).trim() || "0")));
 
-    const payload = {
-      packTitle: packTitle.trim(),
-      sponsorName: sponsorName.trim(),
-      bannerUrl: bannerUrl.trim() || null,
-      logoUrl: logoUrl.trim() || null,
-      qty: validated.qtyNum,
-      items: validated.itemsArr,
-    };
-
-    const requestKey = buildRequestKey({
-      packTitle: payload.packTitle,
-      sponsorName: payload.sponsorName,
-      bannerUrl: payload.bannerUrl || "",
-      logoUrl: payload.logoUrl || "",
-      qty: payload.qty,
-      items: payload.items,
-    });
-
-    const data = await safeJsonFetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    const pdfBase64 = data?.pdfBase64;
-    const csv = data?.csv;
-
-    if (typeof pdfBase64 !== "string" || !pdfBase64) throw new Error("Server did not return pdfBase64.");
-    if (typeof csv !== "string") throw new Error("Server did not return csv.");
-
-    const newPack: GeneratedPack = { pdfBase64, csv, createdAt: Date.now(), requestKey };
-    setPack(newPack);
-    return newPack;
-  }
-
-  function downloadPdfFromPack(p: GeneratedPack) {
-    const bytes = Uint8Array.from(atob(p.pdfBase64), (c) => c.charCodeAt(0));
-    const blob = new Blob([bytes], { type: "application/pdf" });
-    const filename = `${safeFileName(packTitle)}_${safeFileName(sponsorName)}.pdf`;
-    downloadBlob(filename, blob);
-  }
-
-  function downloadCsvFromPack(p: GeneratedPack) {
-    const blob = new Blob([p.csv], { type: "text/csv;charset=utf-8" });
-    const filename = `${safeFileName(packTitle)}_${safeFileName(sponsorName)}_roster.csv`;
-    downloadBlob(filename, blob);
-  }
-
-  async function onGenerateAndDownloadPdf() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const p = await generatePack();
-      downloadPdfFromPack(p);
-    } catch (e: any) {
-      setErr(e?.message || "Failed to generate.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onDownloadCsvRoster() {
-    setErr(null);
-
-    if (pack && packIsFresh) {
-      downloadCsvFromPack(pack);
+    if (items.length < 24) {
+      setError("Need at least 24 pool items (center is FREE).");
       return;
     }
 
-    setBusy(true);
+    setLoading(true);
     try {
-      const p = await generatePack();
-      downloadCsvFromPack(p);
+      const requestKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestKey,
+          title: packTitle,
+          sponsorName,
+          bannerImageUrl: bannerUrl || null,
+          sponsorLogoUrl: logoUrl || null,
+          qty: quantityParsed,
+          items,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to generate pack.");
+      }
+
+      const data = (await res.json()) as GeneratedPack;
+
+      // Download PDF immediately
+      const pdfBytes = Uint8Array.from(atob(data.pdfBase64), (c) => c.charCodeAt(0));
+      downloadBlob(
+        `${packTitle || "bingo-pack"}.pdf`,
+        new Blob([pdfBytes], { type: "application/pdf" })
+      );
+
+      setPack(data);
     } catch (e: any) {
-      setErr(e?.message || "Failed to generate.");
+      setError(e?.message || "Something went wrong.");
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
   }
 
-  return (
-    <main style={{ maxWidth: 780, margin: "0 auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
-      <h1 style={{ fontSize: 34, fontWeight: 800, marginBottom: 10 }}>Grower Bingo Generator</h1>
+  function downloadCsv() {
+    if (!pack) return;
+    const csvBlob = new Blob([pack.csv], { type: "text/csv;charset=utf-8" });
+    downloadBlob(`${packTitle || "bingo-pack"}-roster.csv`, csvBlob);
+  }
 
-      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
-        Debug qty: raw="{String(qty)}" cleaned="{qtyCleaned}" parsed={String(qtyNumParsed)}
+  function resetToDefaults() {
+    setPack(null);
+    setError("");
+    setItemsText(defaultItemsText);
+  }
+
+  return (
+    <main style={{ padding: 20, maxWidth: 720, margin: "0 auto", fontFamily: "system-ui" }}>
+      <h1 style={{ fontSize: 36, marginBottom: 10 }}>Grower Bingo Generator</h1>
+
+      {error ? (
+        <div
+          style={{
+            margin: "12px 0",
+            padding: 12,
+            borderRadius: 8,
+            background: "#ffe9e9",
+            border: "1px solid #ffb3b3",
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
+
+      <label style={{ display: "block", fontWeight: 600, marginTop: 12 }}>Pack title</label>
+      <input
+        value={packTitle}
+        onChange={(e) => setPackTitle(e.target.value)}
+        style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+      />
+
+      <label style={{ display: "block", fontWeight: 600, marginTop: 12 }}>Sponsor name</label>
+      <input
+        value={sponsorName}
+        onChange={(e) => setSponsorName(e.target.value)}
+        style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+      />
+
+      <label style={{ display: "block", fontWeight: 600, marginTop: 12 }}>
+        Banner image URL (top banner)
+      </label>
+      <input
+        value={bannerUrl}
+        onChange={(e) => setBannerUrl(e.target.value)}
+        placeholder="https://..."
+        style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+      />
+
+      <label style={{ display: "block", fontWeight: 600, marginTop: 12 }}>
+        Sponsor logo URL (FREE center square)
+      </label>
+      <input
+        value={logoUrl}
+        onChange={(e) => setLogoUrl(e.target.value)}
+        placeholder="https://..."
+        style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+      />
+
+      <label style={{ display: "block", fontWeight: 600, marginTop: 12 }}>
+        Quantity (1–500)
+      </label>
+      <input
+        value={qty}
+        onChange={(e) => setQty(e.target.value)}
+        inputMode="numeric"
+        style={{ width: 140, padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+      />
+
+      <label style={{ display: "block", fontWeight: 600, marginTop: 12 }}>
+        Square pool items (one per line — need 24+). Current: {itemCount}
+      </label>
+      <textarea
+        value={itemsText}
+        onChange={(e) => setItemsText(e.target.value)}
+        rows={14}
+        style={{
+          width: "100%",
+          padding: 10,
+          borderRadius: 8,
+          border: "1px solid #ccc",
+          fontFamily: "monospace",
+          whiteSpace: "pre",
+        }}
+      />
+
+      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <button
+          onClick={generatePack}
+          disabled={loading}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #111",
+            background: "#111",
+            color: "white",
+            fontWeight: 700,
+            cursor: loading ? "not-allowed" : "pointer",
+          }}
+        >
+          {loading ? "Generating..." : "Generate + Download PDF"}
+        </button>
+
+        <button
+          onClick={downloadCsv}
+          disabled={!pack}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #111",
+            background: "white",
+            color: "#111",
+            fontWeight: 700,
+            cursor: pack ? "pointer" : "not-allowed",
+          }}
+        >
+          Download CSV (Roster)
+        </button>
+
+        <button
+          onClick={resetToDefaults}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 10,
+            border: "1px solid #ccc",
+            background: "white",
+            color: "#111",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Reset pool to defaults
+        </button>
       </div>
 
-      <section style={{ display: "grid", gap: 12 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Pack title</span>
-          <input value={packTitle} onChange={(e) => setPackTitle(e.target.value)} style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc" }} />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Sponsor name</span>
-          <input value={sponsorName} onChange={(e) => setSponsorName(e.target.value)} style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc" }} />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Banner image URL (top banner)</span>
-          <input value={bannerUrl} onChange={(e) => setBannerUrl(e.target.value)} placeholder="https://…" style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc" }} />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Sponsor logo URL (FREE center square)</span>
-          <input value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://…" style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc" }} />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Quantity (1–500)</span>
-          <input inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc", width: 180 }} placeholder="25" />
-        </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontWeight: 700 }}>Square pool items (one per line — need 24+). Current: {itemsList.length}</span>
-          <textarea value={items} onChange={(e) => setItems(e.target.value)} style={{ padding: 12, borderRadius: 12, border: "1px solid #ccc", minHeight: 240, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }} />
-        </label>
-
-        {err ? (
-          <div style={{ color: "#b00020", fontSize: 14 }}>
-            <b>Error:</b> {err}
-          </div>
-        ) : null}
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
-          <button onClick={onGenerateAndDownloadPdf} disabled={busy} style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid #111", background: "#111", color: "white", cursor: busy ? "not-allowed" : "pointer", minWidth: 220 }}>
-            {busy ? "Generating…" : "Generate + Download PDF"}
-          </button>
-
-          <button onClick={onDownloadCsvRoster} disabled={busy} style={{ padding: "12px 14px", borderRadius: 12, border: "1px solid #111", background: "white", color: "#111", cursor: busy ? "not-allowed" : "pointer", minWidth: 200 }}>
-            Download CSV (Roster)
-          </button>
-        </div>
-
-        {pack ? (
-          <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
-            Last generated: <b>{packTitle}</b> — {new Date(pack.createdAt).toLocaleString()}
-          </div>
-        ) : null}
-      </section>
+      <p style={{ marginTop: 12, opacity: 0.75 }}>
+        Note: The default pool is now shared from <code>lib/defaultItems.ts</code>. Update it once,
+        and both the generator + caller can use it.
+      </p>
     </main>
   );
 }
