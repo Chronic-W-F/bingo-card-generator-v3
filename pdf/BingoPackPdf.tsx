@@ -9,35 +9,43 @@ type BingoCard = {
 
 type Props = {
   cards: BingoCard[];
-  gridSize?: number; // passed from API (pack.meta.gridSize)
+  gridSize?: number;
   sponsorImage?: string; // keep for later
 };
 
 const PAGE_PADDING = 36;
-
-// A safe, printable content box for Letter portrait.
-// React-PDF uses "pt" units; these numbers are friendly and stable.
-const CONTENT_WIDTH = 540;  // roughly 8.5" minus margins
-const CONTENT_HEIGHT = 720; // roughly 11" minus margins
+const CONTENT_WIDTH = 540;
+const CONTENT_HEIGHT = 720;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+// Only show icons if ICON_MAP provides an emoji-like value.
+// If ICON_MAP returns a path like "/icons/joes.png", do NOT render it as text.
+function getPrintableIcon(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  if (!v) return null;
+
+  // If it looks like a path or filename, skip for now (we'll add real <Image/> later)
+  if (v.includes("/") || v.includes(".") || v.startsWith("http")) return null;
+
+  // Emoji-like: short, not a word
+  if (v.length <= 3) return v;
+
+  return null;
+}
+
 export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
-  // Prefer passed prop, otherwise infer from first card
   const inferred = cards?.[0]?.grid?.length ?? 5;
   const gridSize = (gridSizeProp ?? inferred) as number;
 
-  // Compute cell size from available width.
-  // Keep within reasonable bounds so 3x3 doesn't get comically huge.
   const cellSize = clamp(Math.floor(CONTENT_WIDTH / gridSize), 70, 110);
-
   const gridWidth = cellSize * gridSize;
   const gridHeight = cellSize * gridSize;
 
-  // Center the grid vertically in the content area
-  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - 90 - gridHeight) / 2)); // 90 = header space
+  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - 90 - gridHeight) / 2));
 
   const styles = StyleSheet.create({
     page: {
@@ -86,12 +94,9 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
       justifyContent: "center",
       padding: 6,
     },
-    // Remove right border on last cell in a row
     cellLastCol: {
       borderRightWidth: 0,
     },
-    // Remove bottom border on last row
-    rowLast: {},
     cellLastRow: {
       borderBottomWidth: 0,
     },
@@ -143,7 +148,8 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
                       isLastRow ? styles.cellLastRow : null,
                     ];
 
-                    const icon = ICON_MAP?.[label];
+                    const rawIcon = (ICON_MAP as any)?.[label];
+                    const icon = getPrintableIcon(rawIcon);
 
                     return (
                       <View key={`c-${card.id}-${rIdx}-${cIdx}`} style={cellStyle as any}>
