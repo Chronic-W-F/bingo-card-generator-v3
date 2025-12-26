@@ -1,184 +1,208 @@
 // lib/bingo.ts
+// Supports 3x3, 4x4, 5x5 cards + auto weekly pool selection.
 
-export type BingoGrid = string[][];
+export const CENTER_LABEL = "Joe’s Grows";
+
 export type BingoCard = {
   id: string;
-  grid: BingoGrid;
+  grid: string[][];
 };
 
-export const BINGO_ITEMS: string[] = [
-  // ===== DEFAULT POOL (edit this list anytime) =====
-  "Solo Cup",
-  "pH Pen",
-  "LED Light",
-  "Fan",
-  "Germinated Seed",
-  "Nutrients Fed",
-  "Topped Plant",
-  "Cal-Mag Deficiency",
-  "Sticky Trichomes",
-  "Training Wires (LST)",
-  "Runoff Check",
-  "pH Issues",
-  "New Growth",
-  "Watered Today",
-  "Flush Time",
-  "Leaf Tucking",
-  "Bud Sites Showing",
-  "Pistils Showing",
-  "Recharge Microbes",
-  "EC / PPM Check",
-  "Tent Zip Open",
-  "Harvest Ready",
-  "Leaf Color Change",
-  "Root Zone Moist",
-  "Canopy Evened",
-  "Lollipop Pruning",
-  "FIM Cut",
-  "Supercropping",
-  "Trellis Net Installed",
-  "Support Stakes Added",
-  "Side Branch Explosion",
-  "Node Spacing Tight",
-  "Stem Thickening",
-  "Fan Leaves Removed",
-  "Recovery Day",
-  "Flower Stretch",
-  "Pre-Flower Confirmed",
-  "Frost Starting",
-  "Terpene Smell Increase",
-  "Bud Swelling",
-  "Cola Formation",
-  "Trichomes Cloudy",
-  "Trichomes Amber",
-  "Calyx Stacking",
-  "Fade Beginning",
-  "VPD Dialed In",
-  "Humidity Spike",
-  "Heat Stress Signs",
-  "Cold Night Temps",
-  "Leaf Temp Check",
-  "Canopy Temp Check",
-  "Lights On Cycle",
-  "Lights Off Cycle",
-  "Exhaust Fan Adjusted",
-  "Airflow Improved",
-  "Reservoir Change",
-  "Top Off Water",
-  "Plain Water Feed",
-  "EC Rising",
-  "EC Dropping",
-  "Nutrient Burn",
-  "Nutrient Lockout",
-  "Deficiency Spotted",
-  "Foliar Feed",
-  "Root Check",
-  "IPM Spray Day",
-  "Sticky Traps Checked",
-  "Fungus Gnats",
-  "Spider Mites",
-  "Powdery Mildew Watch",
-  "Bud Rot Watch",
-  "Neem Oil Smell",
-  "Beneficial Insects",
-  "Leaf Damage Found",
-  "Pest-Free Check",
-  "Harvest Day",
-  "Wet Trim",
-  "Dry Trim",
-  "Hanging Dry",
-  "Dry Room Check",
-  "Jar Time",
-  "Burp Jars",
-  "Cure Check",
-  "Smoke Test",
-  "Sticky Scissors",
-  "Growmie Advice",
-  "New Genetics",
-  "Seed Pop",
-  "Clone Day",
-  "Transplant Day",
-  "Training Day",
-  "Pray for Yield",
-  "Send Pics",
-  "Winner Winner",
-];
+export type BingoPack = {
+  cards: BingoCard[];
+  // The weekly pool actually used to generate these cards (caller should use this)
+  weeklyPool: string[];
+  // All unique items appearing across all cards (excluding center if used)
+  usedItems: string[];
+  meta: {
+    gridSize: number;
+    freeCenter: boolean;
+    squaresPerCard: number;
+    weeklyPoolSize: number;
+    qty: number;
+  };
+};
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
+function cryptoId() {
+  // good enough for IDs
+  return Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+}
+
+export function normalizeLines(input: string): string[] {
+  return input
+    .split(/\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function uniqueStrings(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const key = it.trim();
+    if (!key) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+function shuffle<T>(arr: T[], seed?: number): T[] {
+  // Fisher-Yates; deterministic if seed provided (optional)
+  const a = arr.slice();
+  let s = seed ?? 0;
+
+  function rand() {
+    if (seed == null) return Math.random();
+    // LCG
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  }
+
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rand() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
 }
 
-function makeGridFromItems(items24: string[], centerLabel: string): BingoGrid {
+export function sampleUnique<T>(items: T[], n: number, seed?: number): T[] {
+  if (n <= 0) return [];
+  if (n >= items.length) return items.slice();
+  const shuffled = shuffle(items, seed);
+  return shuffled.slice(0, n);
+}
+
+export function getCardConfig(gridSize: 3 | 4 | 5) {
+  const freeCenter = gridSize === 3 || gridSize === 5; // default behavior
+  const squaresPerCard = gridSize * gridSize - (freeCenter ? 1 : 0);
+
+  // Auto weekly pool sizing:
+  // 5x5 -> 50, 4x4 -> 32, 3x3 (with free center) -> 16
+  let weeklyPoolSize = 2 * squaresPerCard;
+  if (gridSize === 5) weeklyPoolSize = 50;
+  if (gridSize === 4) weeklyPoolSize = 32;
+  if (gridSize === 3) weeklyPoolSize = 16;
+
+  return { gridSize, freeCenter, squaresPerCard, weeklyPoolSize };
+}
+
+function flattenGrid(grid: string[][]): string[] {
+  const out: string[] = [];
+  for (const row of grid) for (const cell of row) out.push(cell);
+  return out;
+}
+
+function gridSignature(grid: string[][]): string {
+  // stable signature to enforce no duplicate grids in a pack
+  return flattenGrid(grid).join("||");
+}
+
+export function createCardFromPool(args: {
+  pool: string[];
+  gridSize: 3 | 4 | 5;
+  freeCenter: boolean;
+  centerLabel?: string;
+  seed?: number;
+}): BingoCard {
+  const { pool, gridSize, freeCenter, centerLabel = CENTER_LABEL, seed } = args;
+
+  const squaresPerCard = gridSize * gridSize - (freeCenter ? 1 : 0);
+  if (pool.length < squaresPerCard) {
+    throw new Error(
+      `Pool too small. Need at least ${squaresPerCard} items for a ${gridSize}x${gridSize} card (freeCenter=${freeCenter}).`
+    );
+  }
+
+  const picks = sampleUnique(pool, squaresPerCard, seed);
+
   const grid: string[][] = [];
   let idx = 0;
 
-  for (let r = 0; r < 5; r++) {
+  for (let r = 0; r < gridSize; r++) {
     const row: string[] = [];
-    for (let c = 0; c < 5; c++) {
-      if (r === 2 && c === 2) row.push(centerLabel);
-      else row.push(items24[idx++]);
+    for (let c = 0; c < gridSize; c++) {
+      if (freeCenter && r === Math.floor(gridSize / 2) && c === Math.floor(gridSize / 2)) {
+        row.push(centerLabel);
+      } else {
+        row.push(picks[idx++]);
+      }
     }
     grid.push(row);
   }
 
-  return grid;
+  return { id: cryptoId(), grid };
 }
 
-function gridKey(grid: BingoGrid): string {
-  return grid.flat().join("|").toLowerCase();
-}
+export function createBingoPackFromMasterPool(args: {
+  masterPool: string[];
+  qty: number;
+  gridSize: 3 | 4 | 5;
+  seed?: number;
+}): BingoPack {
+  const { masterPool, qty, gridSize, seed } = args;
 
-function cleanUnique(pool: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
+  const uniquePool = uniqueStrings(masterPool);
+  const cfg = getCardConfig(gridSize);
 
-  for (const raw of pool) {
-    const s = (raw ?? "").trim();
-    if (!s) continue;
-    const k = s.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(s);
-  }
-  return out;
-}
+  const weeklyPoolSize = Math.min(cfg.weeklyPoolSize, uniquePool.length);
+  const weeklyPool = sampleUnique(uniquePool, weeklyPoolSize, seed);
 
-export function createBingoPack(
-  itemsPool: string[],
-  qty: number,
-  centerLabel: string = "Joe’s Grows"
-): { cards: BingoCard[] } {
-  const clean = cleanUnique(itemsPool).filter((x) => x.toLowerCase() !== centerLabel.toLowerCase());
-
-  if (clean.length < 24) {
-    throw new Error("Need at least 24 pool items (center is FREE).");
-  }
-
-  const seen = new Set<string>();
+  // generate cards with guaranteed unique grids
   const cards: BingoCard[] = [];
+  const sigs = new Set<string>();
 
-  let guard = 0;
+  // To keep things from getting stuck if weeklyPool is small and qty is huge,
+  // we cap attempts. With your sizes this is fine.
+  const maxAttempts = Math.max(1000, qty * 50);
+  let attempts = 0;
+  let localSeed = seed ?? Math.floor(Math.random() * 1_000_000_000);
+
   while (cards.length < qty) {
-    guard++;
-    if (guard > qty * 2000) break; // safety break
+    attempts++;
+    if (attempts > maxAttempts) {
+      throw new Error(
+        `Could not generate ${qty} unique grids from weekly pool size ${weeklyPool.length}. Increase pool size or lower qty.`
+      );
+    }
 
-    const pick = shuffle(clean).slice(0, 24);
-    const grid = makeGridFromItems(pick, centerLabel);
-    const key = gridKey(grid);
+    localSeed = (localSeed * 1103515245 + 12345) >>> 0;
+    const card = createCardFromPool({
+      pool: weeklyPool,
+      gridSize,
+      freeCenter: cfg.freeCenter,
+      seed: localSeed,
+    });
 
-    if (!seen.has(key)) {
-      seen.add(key);
-      cards.push({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-        grid,
-      });
+    const sig = gridSignature(card.grid);
+    if (sigs.has(sig)) continue;
+    sigs.add(sig);
+    cards.push(card);
+  }
+
+  // usedItems = union across cards excluding center label
+  const used = new Set<string>();
+  for (const c of cards) {
+    for (const row of c.grid) {
+      for (const cell of row) {
+        if (cfg.freeCenter && cell === CENTER_LABEL) continue;
+        used.add(cell);
+      }
     }
   }
 
-  return { cards };
+  return {
+    cards,
+    weeklyPool,
+    usedItems: Array.from(used),
+    meta: {
+      gridSize,
+      freeCenter: cfg.freeCenter,
+      squaresPerCard: cfg.squaresPerCard,
+      weeklyPoolSize,
+      qty,
+    },
+  };
 }
