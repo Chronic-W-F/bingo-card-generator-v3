@@ -1,96 +1,82 @@
-import React from "react";
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 
-import BingoPackPdf from "@/pdf/BingoPackPdf";
-import { createBingoPackFromMasterPool, normalizeLines } from "@/lib/bingo";
+import { createBingoPack } from "@/lib/bingo";
+import BingoPackPdf, { type BingoCard } from "@/pdf/BingoPackPdf";
 
 export const runtime = "nodejs";
 
-function getFreeCenterForGrid(gridSize: 3 | 4 | 5) {
-  // Your rule: 3x3 free center ON, 4x4 NO center, 5x5 free center ON
-  if (gridSize === 4) return false;
-  return true;
-}
-
-function requiredUniqueItems(gridSize: 3 | 4 | 5, freeCenter: boolean) {
-  return gridSize * gridSize - (freeCenter ? 1 : 0);
+function normalizeLines(text: unknown) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    const itemsRaw: string = body.items ?? "";
-    const qtyRaw: number = Number(body.qty ?? body.quantity ?? 1);
-    const gridSizeRaw: number = Number(body.gridSize ?? 5);
+    const packTitle = String(body?.packTitle ?? "Grower Bingo Pack").trim();
+    const sponsorName = String(body?.sponsorName ?? "Sponsor").trim();
 
-    const qty = Number.isFinite(qtyRaw) ? Math.max(1, Math.min(500, qtyRaw)) : 1;
+    // allow null/undefined safely
+    const bannerUrl: string | undefined =
+      typeof body?.bannerUrl === "string" && body.bannerUrl.trim()
+        ? body.bannerUrl.trim()
+        : undefined;
 
-    const gridSize =
-      gridSizeRaw === 3 || gridSizeRaw === 4 || gridSizeRaw === 5
-        ? (gridSizeRaw as 3 | 4 | 5)
-        : 5;
+    const logoUrl: string | undefined =
+      typeof body?.logoUrl === "string" && body.logoUrl.trim()
+        ? body.logoUrl.trim()
+        : undefined;
 
-    const freeCenter = getFreeCenterForGrid(gridSize);
-    const needed = requiredUniqueItems(gridSize, freeCenter);
+    const qty = Number(body?.qty ?? 25);
+    const items = Array.isArray(body?.items)
+      ? body.items.map((x: any) => String(x).trim()).filter(Boolean)
+      : normalizeLines(body?.items);
 
-    const masterPool = normalizeLines(itemsRaw);
-
-    // FIX: validate against what the card actually needs
-    if (masterPool.length < needed) {
-      return NextResponse.json(
-        {
-          error: `Not enough items in master pool. Need at least ${needed} for a ${gridSize}x${gridSize} card.`,
-          needed,
-          gridSize,
-          freeCenter,
-          have: masterPool.length,
-        },
-        { status: 400 }
-      );
+    if (!Number.isFinite(qty) || qty < 1 || qty > 500) {
+      return NextResponse.json({ error: "qty must be between 1 and 500" }, { status: 400 });
     }
 
-    const pack = createBingoPackFromMasterPool({
-      masterPool,
-      qty,
-      gridSize,
-    });
-
-    // IMPORTANT: route.ts must NOT contain JSX
-    const doc = React.createElement(BingoPackPdf as any, {
-      cards: pack.cards,
-      gridSize: pack.meta.gridSize,
-    }) as any;
-
-    const pdfBuffer = await renderToBuffer(doc);
-    const pdfBase64 = pdfBuffer.toString("base64");
-
-    // CSV roster: CardID + flattened grid
-    const rows: string[] = [];
-    rows.push(["CardID", "GridSize", "FreeCenter", "Cells"].join(","));
-
-    for (const card of pack.cards) {
-      const flat = card.grid
-        .flat()
-        .map((s) => `"${String(s).replaceAll('"', '""')}"`)
-        .join(";");
-
-      rows.push(
-        [card.id, String(pack.meta.gridSize), String(pack.meta.freeCenter), `"${flat}"`].join(",")
-      );
+    if (items.length < 24) {
+      return NextResponse.json({ error: `Need at least 24 items (got ${items.length})` }, { status: 400 });
     }
 
-    const csv = rows.join("\n");
+    // ✅ Unique-grid pack generation
+    const generated = createBingoPack(items, qty);
 
-    return NextResponse.json({
-      pdfBase64,
-      csv,
-      weeklyPool: pack.weeklyPool,
-      usedItems: pack.usedItems,
-      meta: pack.meta,
-    });
-  } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? "Failed to generate." }, { status: 500 });
+    const cards: BingoCard[] = generated.cards.map((c) => ({
+      id: c.id,
+      grid: c.grid, // string[][]
+    }));
+
+    // ✅ Build PDF document (component returns <Document/>)
+    const doc = (
+      <BingoPackPdf
+        packTitle={packTitle}
+        sponsorName={sponsorName}
+        bannerUrl={bannerUrl}
+        logoUrl={logoUrl}
+        cards={cards}
+      />
+    );
+
+    // ✅ FIX: TS typing mismatch in @react-pdf/renderer
+    const pdfBuffer = await renderToBuffer(doc as any);
+
+    const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
+
+    // roster CSV (card ids)
+    const csvLines = ["card_id", ...cards.map((c) => c.id)];
+    const csv = csvLines.join("\n");
+
+    return NextResponse.json({ pdfBase64, csv });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Unknown server error" },
+      { status: 500 }
+    );
   }
 }
