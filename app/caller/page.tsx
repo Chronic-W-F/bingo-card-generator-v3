@@ -1,217 +1,248 @@
+// app/caller/page.tsx
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { DEFAULT_POOL_TEXT } from "@/lib/defaultItems";
-import { POOL_STORAGE_KEY, countPoolItems, normalizePoolText, textToPool } from "@/lib/pool";
-import { CallerState, startGame, nextDraw } from "@/lib/caller";
+
+const POOL_KEY = "grower-bingo:pool:v1";
+const META_KEY = "grower-bingo:poolmeta:v1";
+const STATE_KEY = "grower-bingo:callerstate:v1";
+
+type CallerState = {
+  createdAt: number;
+  pool: string[];       // active weekly pool
+  remaining: string[];
+  called: string[];
+  callsPerDraw: number; // "1 a day" = set to 1
+};
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function parseLines(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function saveState(st: CallerState) {
+  localStorage.setItem(STATE_KEY, JSON.stringify(st));
+}
+
+function loadState(): CallerState | null {
+  const raw = localStorage.getItem(STATE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as CallerState;
+  } catch {
+    return null;
+  }
+}
 
 export default function CallerPage() {
-  const [poolText, setPoolText] = useState<string>("");
-  const [deckSize, setDeckSize] = useState<string>("50");
-  const [drawSize, setDrawSize] = useState<string>("10");
+  const [state, setState] = useState<CallerState | null>(null);
+  const [poolSource, setPoolSource] = useState<"weekly" | "missing">("missing");
+  const [meta, setMeta] = useState<any>(null);
 
-  const [state, setState] = useState<CallerState>({ started: false, deck: [], called: [], round: 0 });
-  const [latest, setLatest] = useState<string[]>([]);
-  const [error, setError] = useState<string>("");
-
-  // Load shared pool on mount
+  // Load meta for display
   useEffect(() => {
-    try {
-      const shared = localStorage.getItem(POOL_STORAGE_KEY);
-      if (shared && shared.trim().length > 0) setPoolText(shared);
-      else setPoolText(DEFAULT_POOL_TEXT);
-    } catch {
-      setPoolText(DEFAULT_POOL_TEXT);
+    const m = localStorage.getItem(META_KEY);
+    if (m) {
+      try { setMeta(JSON.parse(m)); } catch {}
     }
   }, []);
 
-  // Persist shared pool whenever edited
+  // Restore active game state (survive refresh)
   useEffect(() => {
-    try {
-      localStorage.setItem(POOL_STORAGE_KEY, normalizePoolText(poolText));
-    } catch {}
-  }, [poolText]);
-
-  const poolCount = useMemo(() => countPoolItems(poolText), [poolText]);
-
-  function loadDefaults() {
-    setPoolText(DEFAULT_POOL_TEXT);
-    setError("");
-    setLatest([]);
-    setState({ started: false, deck: [], called: [], round: 0 });
-    try {
-      localStorage.setItem(POOL_STORAGE_KEY, DEFAULT_POOL_TEXT);
-    } catch {}
-  }
-
-  function reloadSharedPool() {
-    try {
-      const shared = localStorage.getItem(POOL_STORAGE_KEY);
-      if (shared != null) setPoolText(shared);
-    } catch {}
-  }
-
-  function clearPool() {
-    setPoolText("");
-    setError("");
-    setLatest([]);
-    setState({ started: false, deck: [], called: [], round: 0 });
-    try {
-      localStorage.setItem(POOL_STORAGE_KEY, "");
-    } catch {}
-  }
-
-  function onStart() {
-    setError("");
-    setLatest([]);
-
-    const pool = textToPool(poolText);
-    const ds = Math.max(1, Number(deckSize || "0"));
-    const dr = Math.max(1, Number(drawSize || "0"));
-
-    if (pool.length === 0) {
-      setError("Pool is empty. Paste items or click Load defaults.");
-      return;
-    }
-    if (ds > pool.length) {
-      setError(`Deck size (${ds}) is larger than your pool (${pool.length}). Reduce deck size or add more topics.`);
-      return;
-    }
-    if (dr <= 0) {
-      setError("Draw size must be 1 or more.");
+    const existing = loadState();
+    if (existing && Array.isArray(existing.pool) && existing.pool.length > 0) {
+      setState(existing);
+      setPoolSource("weekly");
       return;
     }
 
-    setState(startGame(pool, ds));
+    // No game in progress, load weekly pool from generator
+    const weeklyPool = parseLines(localStorage.getItem(POOL_KEY));
+    if (weeklyPool.length === 0) {
+      setPoolSource("missing");
+      setState({
+        createdAt: Date.now(),
+        pool: [],
+        remaining: [],
+        called: [],
+        callsPerDraw: 10,
+      });
+      return;
+    }
+
+    const shuffled = shuffle(weeklyPool);
+    const fresh: CallerState = {
+      createdAt: Date.now(),
+      pool: weeklyPool,
+      remaining: shuffled,
+      called: [],
+      callsPerDraw: 10,
+    };
+    setPoolSource("weekly");
+    setState(fresh);
+    saveState(fresh);
+  }, []);
+
+  const activeCount = state?.pool.length ?? 0;
+  const remainingCount = state?.remaining.length ?? 0;
+  const calledCount = state?.called.length ?? 0;
+
+  const lastDraw = useMemo(() => {
+    if (!state) return [];
+    // last "callsPerDraw" items from called
+    const n = Math.max(1, state.callsPerDraw);
+    return state.called.slice(-n);
+  }, [state]);
+
+  function resetGame() {
+    const weeklyPool = parseLines(localStorage.getItem(POOL_KEY));
+    if (weeklyPool.length === 0) {
+      const empty: CallerState = {
+        createdAt: Date.now(),
+        pool: [],
+        remaining: [],
+        called: [],
+        callsPerDraw: 10,
+      };
+      setPoolSource("missing");
+      setState(empty);
+      saveState(empty);
+      return;
+    }
+
+    const fresh: CallerState = {
+      createdAt: Date.now(),
+      pool: weeklyPool,
+      remaining: shuffle(weeklyPool),
+      called: [],
+      callsPerDraw: state?.callsPerDraw ?? 10,
+    };
+    setPoolSource("weekly");
+    setState(fresh);
+    saveState(fresh);
   }
 
-  function onReset() {
-    setError("");
-    setLatest([]);
-    setState({ started: false, deck: [], called: [], round: 0 });
+  function nextDraw() {
+    if (!state) return;
+
+    // confirmation prompt (locked requirement)
+    const ok = window.confirm(`Draw the next ${state.callsPerDraw} item(s)?`);
+    if (!ok) return;
+
+    const n = Math.max(1, Math.min(state.callsPerDraw, state.remaining.length));
+    const drawn = state.remaining.slice(0, n);
+    const next: CallerState = {
+      ...state,
+      remaining: state.remaining.slice(n),
+      called: state.called.concat(drawn),
+    };
+    setState(next);
+    saveState(next);
   }
 
-  function onNextDraw() {
-    setError("");
-    const dr = Math.max(1, Number(drawSize || "0"));
-    const result = nextDraw(state, dr);
-    setState(result.state);
-    setLatest(result.latest);
-  }
-
-  const calledCount = state.started ? state.called.length : 0;
-  const remainingCount = state.started ? Math.max(0, state.deck.length - state.called.length) : 0;
+  if (!state) return null;
 
   return (
-    <main className="mx-auto max-w-3xl p-4 md:p-8">
-      <div className="mb-6 rounded-lg border p-4 space-y-3">
-        <h1 className="text-3xl font-bold">Grower Bingo — Caller</h1>
+    <main style={{ padding: 16, maxWidth: 900, margin: "0 auto" }}>
+      <h1 style={{ fontSize: 22, fontWeight: 700 }}>Grower Bingo Caller</h1>
 
-        <div className="flex flex-wrap gap-2">
-          <Link href="/">
-            <button className="rounded-md border px-3 py-2 font-semibold">⬅ Back to Generator</button>
-          </Link>
-
-          <button onClick={reloadSharedPool} className="rounded-md border px-3 py-2 font-semibold">
-            Reload shared pool
-          </button>
-        </div>
-
-        <p className="text-sm opacity-80">
-          Draw items in rounds (10 at a time, or whatever you choose). No repeats until the deck is exhausted.
-        </p>
+      <div style={{ marginTop: 8, opacity: 0.9 }}>
+        Active pool:{" "}
+        <b>{poolSource === "weekly" ? `Weekly Pool (${activeCount})` : "MISSING (generate cards first)"}</b>
+        {meta && (
+          <span style={{ marginLeft: 10, opacity: 0.85 }}>
+            • Grid {meta.gridSize}×{meta.gridSize} • Weekly pool {meta.weeklyPoolSize}
+          </span>
+        )}
       </div>
 
-      {error ? (
-        <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-red-900">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="mb-3 font-semibold">
-        Topic Pool (one per line) — Current: {poolCount}
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-2">
-        <button onClick={loadDefaults} className="rounded-md border px-3 py-2">Load defaults</button>
-        <button onClick={reloadSharedPool} className="rounded-md border px-3 py-2">Reload shared pool</button>
-        <button onClick={clearPool} className="rounded-md border px-3 py-2">Clear pool</button>
-      </div>
-
-      <textarea
-        value={poolText}
-        onChange={(e) => setPoolText(e.target.value)}
-        rows={10}
-        className="w-full rounded-md border p-2 font-mono"
-      />
-
-      <div className="mt-4 grid gap-3">
-        <div>
-          <div className="font-semibold">Deck size</div>
+      <div style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <label>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Calls per draw</div>
           <input
-            value={deckSize}
-            onChange={(e) => setDeckSize(e.target.value)}
-            inputMode="numeric"
-            className="w-full rounded-md border p-2"
+            type="number"
+            min={1}
+            max={50}
+            value={state.callsPerDraw}
+            onChange={(e) => {
+              const next = { ...state, callsPerDraw: Number(e.target.value) || 1 };
+              setState(next);
+              saveState(next);
+            }}
           />
-          <div className="text-sm opacity-70">Must be ≤ pool count.</div>
-        </div>
-
-        <div>
-          <div className="font-semibold">Draw size</div>
-          <input
-            value={drawSize}
-            onChange={(e) => setDrawSize(e.target.value)}
-            inputMode="numeric"
-            className="w-full rounded-md border p-2"
-          />
-          <div className="text-sm opacity-70">
-            How many to call each time you press “Next draw”.
+          <div style={{ marginTop: 6, opacity: 0.85 }}>
+            Set to 1 for “one a day”.
           </div>
-        </div>
+        </label>
 
-        <div className="flex flex-wrap gap-2">
-          <button onClick={onStart} className="rounded-md border px-4 py-2 font-semibold" disabled={state.started}>
-            Start Game
-          </button>
-          <button onClick={onReset} className="rounded-md border px-4 py-2 font-semibold">
-            Reset
-          </button>
-          <button onClick={onNextDraw} className="rounded-md border px-4 py-2 font-semibold" disabled={!state.started}>
+        <div style={{ alignSelf: "end", display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={nextDraw} disabled={remainingCount === 0 || activeCount === 0}>
             Next draw
           </button>
+          <button onClick={resetGame}>
+            Reset game
+          </button>
         </div>
+      </div>
 
-        <div className="mt-2 space-y-1">
-          <div className="font-semibold">Round: {state.round}</div>
-          <div className="font-semibold">Called: {calledCount} / {state.deck.length || Number(deckSize || 0)}</div>
-          <div className="font-semibold">Remaining: {remainingCount}</div>
+      <div style={{ marginTop: 14, display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ padding: 10, border: "1px solid #ddd", borderRadius: 8 }}>
+          <div style={{ fontWeight: 700 }}>Remaining</div>
+          <div>{remainingCount}</div>
         </div>
+        <div style={{ padding: 10, border: "1px solid #ddd", borderRadius: 8 }}>
+          <div style={{ fontWeight: 700 }}>Called</div>
+          <div>{calledCount}</div>
+        </div>
+      </div>
 
-        <div className="mt-3">
-          <div className="font-semibold">Latest draw</div>
-          {latest.length ? (
-            <ul className="list-disc pl-6">
-              {latest.map((x) => (
-                <li key={x}>{x}</li>
-              ))}
-            </ul>
-          ) : (
-            <div className="opacity-70">No draw yet.</div>
-          )}
-        </div>
+      <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Most recent draw</div>
+        {lastDraw.length === 0 ? (
+          <div style={{ opacity: 0.8 }}>No calls yet.</div>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {lastDraw.map((x, i) => (
+              <li key={`${x}-${i}`} style={{ fontSize: 18, marginBottom: 4 }}>
+                {x}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
-        <div className="mt-3">
-          <div className="font-semibold">All called so far</div>
-          {state.called.length ? (
-            <div className="whitespace-pre-wrap rounded-md border p-2 font-mono">
-              {state.called.join(", ")}
-            </div>
-          ) : (
-            <div className="opacity-70">Nothing called yet.</div>
-          )}
-        </div>
+      <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>All calls (stays on page)</div>
+        {state.called.length === 0 ? (
+          <div style={{ opacity: 0.8 }}>Nothing called yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {state.called.map((x, i) => (
+              <span
+                key={`${x}-${i}`}
+                style={{
+                  border: "1px solid #ccc",
+                  borderRadius: 999,
+                  padding: "6px 10px",
+                }}
+              >
+                {i + 1}. {x}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </main>
   );
