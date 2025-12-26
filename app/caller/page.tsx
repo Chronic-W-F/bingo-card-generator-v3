@@ -1,22 +1,34 @@
-// app/caller/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { DEFAULT_POOL_TEXT } from "@/lib/defaultItems";
 
-const POOL_KEY = "grower-bingo:pool:v1";
-const META_KEY = "grower-bingo:poolmeta:v1";
-const STATE_KEY = "grower-bingo:callerstate:v1";
+const SHARED_POOL_KEY = "grower-bingo:pool:v1";
+const CALLER_STATE_KEY = "grower-bingo:caller:v1";
 
 type CallerState = {
-  createdAt: number;
-  pool: string[];       // active weekly pool
-  remaining: string[];
-  called: string[];
-  callsPerDraw: number; // "1 a day" = set to 1
+  poolText: string;
+  deckSize: number;
+  drawSize: number;
+  round: number;
+  deck: string[]; // shuffled items used this game (length = deckSize)
+  called: string[]; // called items in order
 };
 
+function normalizeLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 function shuffle<T>(arr: T[]): T[] {
-  const a = arr.slice();
+  const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
@@ -24,226 +36,247 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-function parseLines(raw: string | null): string[] {
-  if (!raw) return [];
-  return raw
-    .split(/\r?\n/g)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function saveState(st: CallerState) {
-  localStorage.setItem(STATE_KEY, JSON.stringify(st));
-}
-
-function loadState(): CallerState | null {
-  const raw = localStorage.getItem(STATE_KEY);
-  if (!raw) return null;
+function safeParse<T>(value: string | null): T | null {
+  if (!value) return null;
   try {
-    return JSON.parse(raw) as CallerState;
+    return JSON.parse(value) as T;
   } catch {
     return null;
   }
 }
 
 export default function CallerPage() {
-  const [state, setState] = useState<CallerState | null>(null);
-  const [poolSource, setPoolSource] = useState<"weekly" | "missing">("missing");
-  const [meta, setMeta] = useState<any>(null);
+  const [poolText, setPoolText] = useState<string>("");
+  const [deckSize, setDeckSize] = useState<number>(50);
+  const [drawSize, setDrawSize] = useState<number>(10);
 
-  // Load meta for display
+  const [round, setRound] = useState<number>(0);
+  const [deck, setDeck] = useState<string[]>([]);
+  const [called, setCalled] = useState<string[]>([]);
+
+  // Derived pool
+  const pool = useMemo(() => normalizeLines(poolText), [poolText]);
+  const poolCount = pool.length;
+
+  // Remaining derived from actual deck length (never from deckSize input)
+  const remaining = Math.max(0, deck.length - called.length);
+
+  // Load saved caller state on mount
   useEffect(() => {
-    const m = localStorage.getItem(META_KEY);
-    if (m) {
-      try { setMeta(JSON.parse(m)); } catch {}
+    const saved = safeParse<CallerState>(localStorage.getItem(CALLER_STATE_KEY));
+
+    if (saved) {
+      setPoolText(saved.poolText ?? "");
+      setDeckSize(saved.deckSize ?? 50);
+      setDrawSize(saved.drawSize ?? 10);
+      setRound(saved.round ?? 0);
+      setDeck(Array.isArray(saved.deck) ? saved.deck : []);
+      setCalled(Array.isArray(saved.called) ? saved.called : []);
+      return;
+    }
+
+    // If no saved state, try shared pool, otherwise defaults
+    const shared = localStorage.getItem(SHARED_POOL_KEY);
+    if (shared && shared.trim()) {
+      setPoolText(shared);
+    } else {
+      setPoolText(DEFAULT_POOL_TEXT);
     }
   }, []);
 
-  // Restore active game state (survive refresh)
+  // Persist caller state whenever anything changes
   useEffect(() => {
-    const existing = loadState();
-    if (existing && Array.isArray(existing.pool) && existing.pool.length > 0) {
-      setState(existing);
-      setPoolSource("weekly");
-      return;
-    }
-
-    // No game in progress, load weekly pool from generator
-    const weeklyPool = parseLines(localStorage.getItem(POOL_KEY));
-    if (weeklyPool.length === 0) {
-      setPoolSource("missing");
-      setState({
-        createdAt: Date.now(),
-        pool: [],
-        remaining: [],
-        called: [],
-        callsPerDraw: 10,
-      });
-      return;
-    }
-
-    const shuffled = shuffle(weeklyPool);
-    const fresh: CallerState = {
-      createdAt: Date.now(),
-      pool: weeklyPool,
-      remaining: shuffled,
-      called: [],
-      callsPerDraw: 10,
+    const state: CallerState = {
+      poolText,
+      deckSize,
+      drawSize,
+      round,
+      deck,
+      called,
     };
-    setPoolSource("weekly");
-    setState(fresh);
-    saveState(fresh);
-  }, []);
+    localStorage.setItem(CALLER_STATE_KEY, JSON.stringify(state));
+  }, [poolText, deckSize, drawSize, round, deck, called]);
 
-  const activeCount = state?.pool.length ?? 0;
-  const remainingCount = state?.remaining.length ?? 0;
-  const calledCount = state?.called.length ?? 0;
+  // IMPORTANT: whenever pool changes, clamp deckSize down to poolCount
+  useEffect(() => {
+    if (poolCount <= 0) return;
 
-  const lastDraw = useMemo(() => {
-    if (!state) return [];
-    // last "callsPerDraw" items from called
-    const n = Math.max(1, state.callsPerDraw);
-    return state.called.slice(-n);
-  }, [state]);
+    // Clamp deckSize to [1..poolCount]
+    const clampedDeck = clamp(deckSize, 1, poolCount);
+    if (clampedDeck !== deckSize) setDeckSize(clampedDeck);
+
+    // Clamp drawSize to [1..clampedDeck]
+    const clampedDraw = clamp(drawSize, 1, clampedDeck);
+    if (clampedDraw !== drawSize) setDrawSize(clampedDraw);
+
+    // If a game is already started, ALSO ensure the existing deck isn't invalid.
+    // (If pool shrank below deck length, shrink deck while preserving already-called ordering.)
+    if (deck.length > 0 && deck.length > poolCount) {
+      const newDeck = deck.filter((x) => pool.includes(x)).slice(0, poolCount);
+      const newCalled = called.filter((x) => newDeck.includes(x));
+      setDeck(newDeck);
+      setCalled(newCalled);
+      setRound(Math.ceil(newCalled.length / Math.max(1, drawSize)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poolCount]);
+
+  function loadDefaults() {
+    setPoolText(DEFAULT_POOL_TEXT);
+  }
+
+  function reloadSharedPool() {
+    const shared = localStorage.getItem(SHARED_POOL_KEY);
+    if (shared && shared.trim()) {
+      setPoolText(shared);
+    }
+  }
+
+  function onDeckSizeChange(v: string) {
+    const n = Number(v);
+    const max = Math.max(1, poolCount);
+    const clamped = Number.isFinite(n) ? clamp(n, 1, max) : 1;
+    setDeckSize(clamped);
+
+    // Keep drawSize valid too
+    setDrawSize((d) => clamp(d, 1, clamped));
+  }
+
+  function onDrawSizeChange(v: string) {
+    const n = Number(v);
+    const max = Math.max(1, Math.min(deckSize, Math.max(1, poolCount)));
+    const clamped = Number.isFinite(n) ? clamp(n, 1, max) : 1;
+    setDrawSize(clamped);
+  }
+
+  function startGame() {
+    if (poolCount === 0) return;
+
+    const finalDeckSize = clamp(deckSize, 1, poolCount);
+    const newDeck = shuffle(pool).slice(0, finalDeckSize);
+
+    setDeck(newDeck);
+    setCalled([]);
+    setRound(0);
+  }
 
   function resetGame() {
-    const weeklyPool = parseLines(localStorage.getItem(POOL_KEY));
-    if (weeklyPool.length === 0) {
-      const empty: CallerState = {
-        createdAt: Date.now(),
-        pool: [],
-        remaining: [],
-        called: [],
-        callsPerDraw: 10,
-      };
-      setPoolSource("missing");
-      setState(empty);
-      saveState(empty);
-      return;
-    }
-
-    const fresh: CallerState = {
-      createdAt: Date.now(),
-      pool: weeklyPool,
-      remaining: shuffle(weeklyPool),
-      called: [],
-      callsPerDraw: state?.callsPerDraw ?? 10,
-    };
-    setPoolSource("weekly");
-    setState(fresh);
-    saveState(fresh);
+    setDeck([]);
+    setCalled([]);
+    setRound(0);
   }
 
   function nextDraw() {
-    if (!state) return;
+    if (deck.length === 0) return;
 
-    // confirmation prompt (locked requirement)
-    const ok = window.confirm(`Draw the next ${state.callsPerDraw} item(s)?`);
+    const stillRemaining = deck.length - called.length;
+    if (stillRemaining <= 0) return;
+
+    const n = clamp(drawSize, 1, deck.length);
+    const toTake = Math.min(n, stillRemaining);
+
+    const ok = window.confirm(`Draw the next ${toTake} item(s)?`);
     if (!ok) return;
 
-    const n = Math.max(1, Math.min(state.callsPerDraw, state.remaining.length));
-    const drawn = state.remaining.slice(0, n);
-    const next: CallerState = {
-      ...state,
-      remaining: state.remaining.slice(n),
-      called: state.called.concat(drawn),
-    };
-    setState(next);
-    saveState(next);
+    const next = deck.slice(called.length, called.length + toTake);
+    const updatedCalled = [...called, ...next];
+
+    setCalled(updatedCalled);
+    setRound((r) => r + 1);
   }
 
-  if (!state) return null;
-
   return (
-    <main style={{ padding: 16, maxWidth: 900, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700 }}>Grower Bingo Caller</h1>
-
-      <div style={{ marginTop: 8, opacity: 0.9 }}>
-        Active pool:{" "}
-        <b>{poolSource === "weekly" ? `Weekly Pool (${activeCount})` : "MISSING (generate cards first)"}</b>
-        {meta && (
-          <span style={{ marginLeft: 10, opacity: 0.85 }}>
-            • Grid {meta.gridSize}×{meta.gridSize} • Weekly pool {meta.weeklyPoolSize}
-          </span>
-        )}
+    <div style={{ padding: 16, maxWidth: 900, margin: "0 auto" }}>
+      <div
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
+        <h1 style={{ margin: 0 }}>Grower Bingo — Caller</h1>
+        <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+          <Link href="/" style={{ padding: "10px 14px", border: "1px solid #000", borderRadius: 10 }}>
+            Back to Generator
+          </Link>
+          <button
+            onClick={reloadSharedPool}
+            style={{ padding: "10px 14px", border: "1px solid #000", borderRadius: 10 }}
+          >
+            Reload shared pool
+          </button>
+        </div>
       </div>
 
-      <div style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <label>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Calls per draw</div>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <h2 style={{ margin: 0 }}>Topic Pool (one per line) — Current: {poolCount}</h2>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={loadDefaults}>Load defaults</button>
+            <button onClick={reloadSharedPool}>Reload shared pool</button>
+          </div>
+        </div>
+
+        <textarea
+          value={poolText}
+          onChange={(e) => setPoolText(e.target.value)}
+          rows={10}
+          style={{ width: "100%", marginTop: 8, fontFamily: "monospace" }}
+        />
+      </div>
+
+      <div style={{ display: "grid", gap: 12 }}>
+        <div>
+          <label style={{ display: "block", fontWeight: 600 }}>Deck size</label>
           <input
+            value={deckSize}
             type="number"
             min={1}
-            max={50}
-            value={state.callsPerDraw}
-            onChange={(e) => {
-              const next = { ...state, callsPerDraw: Number(e.target.value) || 1 };
-              setState(next);
-              saveState(next);
-            }}
+            max={Math.max(1, poolCount)}
+            onChange={(e) => onDeckSizeChange(e.target.value)}
+            style={{ width: 160 }}
           />
-          <div style={{ marginTop: 6, opacity: 0.85 }}>
-            Set to 1 for “one a day”.
+          <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>
+            Must be ≤ pool count. (Auto-clamped)
           </div>
-        </label>
-
-        <div style={{ alignSelf: "end", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={nextDraw} disabled={remainingCount === 0 || activeCount === 0}>
-            Next draw
-          </button>
-          <button onClick={resetGame}>
-            Reset game
-          </button>
         </div>
-      </div>
 
-      <div style={{ marginTop: 14, display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ padding: 10, border: "1px solid #ddd", borderRadius: 8 }}>
-          <div style={{ fontWeight: 700 }}>Remaining</div>
-          <div>{remainingCount}</div>
+        <div>
+          <label style={{ display: "block", fontWeight: 600 }}>Draw size</label>
+          <input
+            value={drawSize}
+            type="number"
+            min={1}
+            max={Math.max(1, Math.min(deckSize, Math.max(1, poolCount)))}
+            onChange={(e) => onDrawSizeChange(e.target.value)}
+            style={{ width: 160 }}
+          />
         </div>
-        <div style={{ padding: 10, border: "1px solid #ddd", borderRadius: 8 }}>
-          <div style={{ fontWeight: 700 }}>Called</div>
-          <div>{calledCount}</div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={startGame}>Start Game</button>
+          <button onClick={resetGame}>Reset</button>
+          <button onClick={nextDraw}>Next draw</button>
         </div>
-      </div>
 
-      <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Most recent draw</div>
-        {lastDraw.length === 0 ? (
-          <div style={{ opacity: 0.8 }}>No calls yet.</div>
-        ) : (
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {lastDraw.map((x, i) => (
-              <li key={`${x}-${i}`} style={{ fontSize: 18, marginBottom: 4 }}>
-                {x}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+        <div style={{ fontWeight: 700 }}>
+          <div>Round: {round}</div>
+          <div>Called: {called.length} / {deck.length}</div>
+          <div>Remaining: {remaining}</div>
+        </div>
 
-      <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>All calls (stays on page)</div>
-        {state.called.length === 0 ? (
-          <div style={{ opacity: 0.8 }}>Nothing called yet.</div>
-        ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {state.called.map((x, i) => (
-              <span
-                key={`${x}-${i}`}
-                style={{
-                  border: "1px solid #ccc",
-                  borderRadius: 999,
-                  padding: "6px 10px",
-                }}
-              >
-                {i + 1}. {x}
-              </span>
-            ))}
+        {called.length > 0 ? (
+          <div>
+            <h3 style={{ marginBottom: 8 }}>Called so far</h3>
+            <ol>
+              {called.map((x, i) => (
+                <li key={`${x}-${i}`}>{x}</li>
+              ))}
+            </ol>
           </div>
-        )}
+        ) : null}
       </div>
-    </main>
+    </div>
   );
 }
