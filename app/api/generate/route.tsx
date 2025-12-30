@@ -1,79 +1,87 @@
-// app/api/generate/route.tsx
-import { NextResponse } from "next/server";
-import { renderToBuffer } from "@react-pdf/renderer";
+// pdf/BingoPackPdf.tsx
+import React from "react";
+import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 
-import { createBingoPackFromMasterPool } from "@/lib/bingo";
-import type { BingoCard } from "@/lib/bingo"; // ✅ type belongs here
-import BingoPackPdf from "@/pdf/BingoPackPdf"; // ✅ default export only
-
-export const runtime = "nodejs";
-
-type GenerateRequest = {
-  items?: string[]; // master pool (optional)
-  qty?: number;
-  quantity?: number; // legacy
-  gridSize?: 3 | 4 | 5;
-
-  // optional “skin” props (safe to ignore if your PDF component doesn’t use them)
-  packTitle?: string;
-  sponsorName?: string;
-  bannerUrl?: string;
-  logoUrl?: string;
+export type BingoCard = {
+  id: string;
+  grid: string[][];
 };
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
+type Props = {
+  cards: BingoCard[];
+};
 
-export async function POST(req: Request) {
-  try {
-    const body = (await req.json()) as GenerateRequest;
+const styles = StyleSheet.create({
+  page: {
+    padding: 24,
+    fontSize: 10,
+    fontFamily: "Helvetica",
+  },
+  card: {
+    marginBottom: 24,
+  },
+  header: {
+    textAlign: "center",
+    marginBottom: 12,
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+  grid: {
+    display: "flex",
+    flexDirection: "column",
+    borderWidth: 1,
+    borderColor: "#000",
+  },
+  row: {
+    flexDirection: "row",
+  },
+  cell: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#000",
+    minHeight: 60,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 4,
+  },
+  cellText: {
+    textAlign: "center",
+    fontSize: 9,
+  },
+  footer: {
+    marginTop: 8,
+    textAlign: "center",
+    fontSize: 8,
+    color: "#555",
+  },
+});
 
-    const qtyRaw = body.qty ?? body.quantity ?? 1;
-    const qty = clamp(Number(qtyRaw) || 1, 1, 500);
+const BingoPackPdf: React.FC<Props> = ({ cards }) => {
+  return (
+    <Document>
+      {cards.map((card) => (
+        <Page size="LETTER" style={styles.page} key={card.id}>
+          <View style={styles.card}>
+            <Text style={styles.header}>Grower Bingo</Text>
 
-    const gridSize = (body.gridSize ?? 5) as 3 | 4 | 5;
+            <View style={styles.grid}>
+              {card.grid.map((row, rIdx) => (
+                <View style={styles.row} key={rIdx}>
+                  {row.map((cell, cIdx) => (
+                    <View style={styles.cell} key={cIdx}>
+                      <Text style={styles.cellText}>{cell}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
 
-    // Master pool: either supplied, or empty -> pack generator can still run
-    // but you SHOULD pass items from the frontend.
-    const masterPool = Array.isArray(body.items) ? body.items : [];
+            <Text style={styles.footer}>Card ID: {card.id}</Text>
+          </View>
+        </Page>
+      ))}
+    </Document>
+  );
+};
 
-    const pack = createBingoPackFromMasterPool({
-      masterPool,
-      qty,
-      gridSize,
-    });
-
-    const packTitle = body.packTitle ?? "Grower Bingo Pack";
-    const sponsorName = body.sponsorName ?? "";
-    const bannerUrl = body.bannerUrl ?? "";
-    const logoUrl = body.logoUrl ?? "";
-
-    // Ensure cards match the expected shape for the PDF: { id, grid }
-    const cards: BingoCard[] = pack.cards;
-
-    const doc = (
-      <BingoPackPdf
-        cards={cards}
-        packTitle={packTitle}
-        sponsorName={sponsorName}
-        bannerUrl={bannerUrl}
-        logoUrl={logoUrl}
-      />
-    );
-
-    const pdfBuffer = await renderToBuffer(doc);
-
-    return NextResponse.json({
-      pdfBase64: Buffer.from(pdfBuffer).toString("base64"),
-      usedItems: pack.usedItems,
-      weeklyPool: pack.weeklyPool,
-      meta: pack.meta,
-    });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message ?? "Unknown error" },
-      { status: 500 }
-    );
-  }
-}
+export default BingoPackPdf;
