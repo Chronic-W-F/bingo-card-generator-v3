@@ -1,3 +1,4 @@
+// pdf/BingoPackPdf.tsx
 import React from "react";
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { ICON_MAP } from "@/lib/iconMap";
@@ -21,8 +22,9 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-// Only show icons if ICON_MAP provides an emoji-like value.
-// If ICON_MAP returns a path like "/icons/joes.png", do NOT render it as text.
+// ✅ Fix for the “mystery Chinese character”:
+// If ICON_MAP contains a bad glyph (e.g., "中", "文", "漢", etc.), we block it.
+// We also block any non-emoji short strings.
 function getPrintableIcon(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const v = value.trim();
@@ -31,7 +33,19 @@ function getPrintableIcon(value: unknown): string | null {
   // If it looks like a path or filename, skip for now (we'll add real <Image/> later)
   if (v.includes("/") || v.includes(".") || v.startsWith("http")) return null;
 
-  // Emoji-like: short, not a word
+  // Block any CJK glyphs / symbols that show up as “mystery characters”
+  // (covers common Chinese/Japanese/Korean unicode ranges)
+  if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(v)) return null;
+
+  // Allow emoji-ish icons only (keep it tight)
+  // If it's letters/numbers/punctuation, skip it.
+  if (/^[\p{L}\p{N}\p{P}\p{S}]+$/u.test(v)) {
+    // This matches a lot; we only want emoji-like *non-letter* icons.
+    // So if it contains any letters/numbers, reject.
+    if (/[\p{L}\p{N}]/u.test(v)) return null;
+  }
+
+  // Emoji-like: short and not a word
   if (v.length <= 3) return v;
 
   return null;
