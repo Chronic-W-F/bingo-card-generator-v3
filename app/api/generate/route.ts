@@ -3,7 +3,7 @@ import React from "react";
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import BingoPackPdf from "@/pdf/BingoPackPdf";
-import { createBingoPackFromMasterPool } from "@/lib/bingo";
+import { createBingoPack } from "@/lib/bingo";
 
 export const runtime = "nodejs";
 
@@ -72,7 +72,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const pack = createBingoPackFromMasterPool(items, qty);
+    // ✅ This is the 2-arg generator
+    const pack = createBingoPack(items, qty);
     const cards: BingoCard[] = (pack?.cards ?? []) as BingoCard[];
 
     if (!Array.isArray(cards) || cards.length === 0) {
