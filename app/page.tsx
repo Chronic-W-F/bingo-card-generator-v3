@@ -45,6 +45,40 @@ function normalizeLines(text: string): string[] {
     .filter(Boolean);
 }
 
+function safeFileName(s: string) {
+  const out = (s || "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_");
+  return out || "bingo-pack";
+}
+
+function downloadBase64Pdf(filename: string, base64: string) {
+  // Convert base64 to Blob
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes], { type: "application/pdf" });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadTextFile(filename: string, text: string, mime = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function Page() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
@@ -57,11 +91,12 @@ export default function Page() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [pack, setPack] = useState<GeneratedPack | null>(null);
   const [error, setError] = useState<string>("");
+  const [info, setInfo] = useState<string>("");
 
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
 
-  // Keep the shared pool in localStorage so Caller can "Reload shared pool"
+  // Keep the shared pool synced for Caller reload
   useEffect(() => {
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
@@ -73,6 +108,7 @@ export default function Page() {
   function loadDefaults() {
     setItemsText(DEFAULT_ITEMS);
     setError("");
+    setInfo("");
   }
 
   function clampQty(raw: string) {
@@ -81,20 +117,20 @@ export default function Page() {
     return Math.max(1, Math.min(500, n));
   }
 
-  async function generatePack() {
+  async function generateAndDownloadPdf() {
     setError("");
+    setInfo("");
 
     const qty = clampQty(qtyInput);
 
-    // ✅ client-side hard check using the *same* normalized lines we send to server
     if (poolLines.length < 24) {
       setError(
-        `Pool too small. Need at least 24 items for a 5x5 card (freeCenter=true). You have ${poolLines.length}.`
+        `Pool too small. Need at least 24 items for a 5x5 card (FREE center). You have ${poolLines.length}.`
       );
       return;
     }
 
-    // ✅ also ensure Caller pool is synced right before generating
+    // Ensure caller pool is synced before generating
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
     } catch {
@@ -112,7 +148,7 @@ export default function Page() {
           bannerImageUrl,
           sponsorLogoUrl,
           qty,
-          items: poolLines, // ✅ send array, not raw text
+          items: poolLines, // send array
         }),
       });
 
@@ -120,13 +156,17 @@ export default function Page() {
 
       if (!res.ok) {
         setError(data?.error || "Generate failed.");
-        setIsGenerating(false);
+        return;
+      }
+
+      if (!data?.pdfBase64) {
+        setError("Generate succeeded but PDF was missing from the response.");
         return;
       }
 
       const nextPack: GeneratedPack = {
         pdfBase64: data.pdfBase64,
-        csv: data.csv,
+        csv: data.csv || "",
         createdAt: Date.now(),
         requestKey: data.requestKey || String(Date.now()),
         usedItems: data.usedItems,
@@ -134,7 +174,7 @@ export default function Page() {
 
       setPack(nextPack);
 
-      // Option B: if API returns usedItems, store those as the shared pool for Caller
+      // If API returns usedItems, sync those to Caller pool (Option B)
       if (Array.isArray(data.usedItems) && data.usedItems.length) {
         try {
           window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
@@ -142,6 +182,19 @@ export default function Page() {
           // ignore
         }
       }
+
+      // ✅ AUTO DOWNLOAD PDF
+      const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
+
+      // Some mobile browsers are finicky; slight delay helps reliability.
+      setTimeout(() => {
+        try {
+          downloadBase64Pdf(filename, data.pdfBase64);
+          setInfo("PDF download triggered. If nothing happened, use the manual Download PDF button below.");
+        } catch (e: any) {
+          setError(e?.message || "Could not trigger PDF download.");
+        }
+      }, 150);
     } catch (e: any) {
       setError(e?.message || "Generate failed.");
     } finally {
@@ -149,35 +202,16 @@ export default function Page() {
     }
   }
 
-  function downloadBase64Pdf() {
+  function manualDownloadPdf() {
     if (!pack?.pdfBase64) return;
-    const byteCharacters = atob(pack.pdfBase64);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: "application/pdf" });
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(title || "bingo-pack").replace(/[^\w\-]+/g, "_")}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const filename = `${safeFileName(title)}-${pack.requestKey}.pdf`;
+    downloadBase64Pdf(filename, pack.pdfBase64);
   }
 
   function downloadCsv() {
     if (!pack?.csv) return;
-    const blob = new Blob([pack.csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(title || "bingo-roster").replace(/[^\w\-]+/g, "_")}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const filename = `${safeFileName(title)}-${pack.requestKey}.csv`;
+    downloadTextFile(filename, pack.csv, "text/csv;charset=utf-8");
   }
 
   return (
@@ -318,7 +352,7 @@ export default function Page() {
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
             <button
-              onClick={generatePack}
+              onClick={generateAndDownloadPdf}
               disabled={isGenerating}
               style={{
                 padding: "12px 16px",
@@ -327,10 +361,25 @@ export default function Page() {
                 background: isGenerating ? "#9ca3af" : "#111827",
                 color: "white",
                 cursor: isGenerating ? "not-allowed" : "pointer",
-                minWidth: 220,
+                minWidth: 240,
               }}
             >
               {isGenerating ? "Generating..." : "Generate + Download PDF"}
+            </button>
+
+            <button
+              onClick={manualDownloadPdf}
+              disabled={!pack}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #111827",
+                background: !pack ? "#9ca3af" : "white",
+                cursor: !pack ? "not-allowed" : "pointer",
+                minWidth: 180,
+              }}
+            >
+              Download PDF
             </button>
 
             <button
@@ -364,15 +413,8 @@ export default function Page() {
             </a>
           </div>
 
-          {error ? (
-            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div>
-          ) : null}
-
-          {pack ? (
-            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              Pack generated. You can re-download the PDF from the button above, and download the roster CSV anytime.
-            </div>
-          ) : null}
+          {error ? <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div> : null}
+          {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
     </div>
