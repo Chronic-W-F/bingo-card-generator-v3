@@ -1,23 +1,13 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import Link from "next/link";
-
-type ApiResponse = {
-  pdfBase64: string;
-  csv: string;
-  usedItems?: string[];
-  createdAt?: number;
-  requestKey?: string;
-  error?: string;
-};
+import React, { useEffect, useMemo, useState } from "react";
 
 type GeneratedPack = {
   pdfBase64: string;
   csv: string;
-  usedItems: string[];
   createdAt: number;
   requestKey: string;
+  usedItems?: string[];
 };
 
 const SHARED_POOL_KEY = "grower-bingo:pool:v1";
@@ -50,113 +40,144 @@ Late flower fade`;
 
 function normalizeLines(text: string): string[] {
   return text
-    .split("\n")
+    .split(/\r?\n/g)
     .map((s) => s.trim())
     .filter(Boolean);
 }
 
-function downloadBlob(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function downloadBase64Pdf(filename: string, base64: string) {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], { type: "application/pdf" });
-  downloadBlob(filename, blob);
-}
-
-export default function GeneratorPage() {
-  const [packTitle, setPackTitle] = useState("Harvest Heroes Bingo");
+export default function Page() {
+  const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
   const [bannerImageUrl, setBannerImageUrl] = useState("");
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
-
-  const [quantity, setQuantity] = useState("25");
-  const qtyParsed = useMemo(() => {
-    const n = Number.parseInt((quantity || "").trim(), 10);
-    if (!Number.isFinite(n)) return 25;
-    return Math.max(1, Math.min(500, n));
-  }, [quantity]);
+  const [qtyInput, setQtyInput] = useState("25");
 
   const [itemsText, setItemsText] = useState(DEFAULT_ITEMS);
-  const itemsCount = useMemo(() => normalizeLines(itemsText).length, [itemsText]);
 
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
   const [pack, setPack] = useState<GeneratedPack | null>(null);
+  const [error, setError] = useState<string>("");
+
+  const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
+  const poolCount = poolLines.length;
+
+  // Keep the shared pool in localStorage so Caller can "Reload shared pool"
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
+    } catch {
+      // ignore
+    }
+  }, [poolLines]);
+
+  function loadDefaults() {
+    setItemsText(DEFAULT_ITEMS);
+    setError("");
+  }
+
+  function clampQty(raw: string) {
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n)) return 25;
+    return Math.max(1, Math.min(500, n));
+  }
 
   async function generatePack() {
-    setMsg("");
-    setBusy(true);
+    setError("");
 
+    const qty = clampQty(qtyInput);
+
+    // ✅ client-side hard check using the *same* normalized lines we send to server
+    if (poolLines.length < 24) {
+      setError(
+        `Pool too small. Need at least 24 items for a 5x5 card (freeCenter=true). You have ${poolLines.length}.`
+      );
+      return;
+    }
+
+    // ✅ also ensure Caller pool is synced right before generating
+    try {
+      window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
+    } catch {
+      // ignore
+    }
+
+    setIsGenerating(true);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: packTitle,
+          title,
           sponsorName,
           bannerImageUrl,
           sponsorLogoUrl,
-          qty: qtyParsed,
-          itemsText,
+          qty,
+          items: poolLines, // ✅ send array, not raw text
         }),
       });
 
-      const data = (await res.json()) as ApiResponse;
+      const data = await res.json();
 
-      if (!res.ok || data.error) {
-        throw new Error(data.error || `Request failed (${res.status})`);
+      if (!res.ok) {
+        setError(data?.error || "Generate failed.");
+        setIsGenerating(false);
+        return;
       }
 
-      const usedItems = Array.isArray(data.usedItems) ? data.usedItems : [];
-      const createdAt = typeof data.createdAt === "number" ? data.createdAt : Date.now();
-      const requestKey = typeof data.requestKey === "string" ? data.requestKey : String(Date.now());
-
-      try {
-        window.localStorage.setItem(SHARED_POOL_KEY, usedItems.join("\n"));
-      } catch {
-        // ignore
-      }
-
-      setPack({
+      const nextPack: GeneratedPack = {
         pdfBase64: data.pdfBase64,
         csv: data.csv,
-        usedItems,
-        createdAt,
-        requestKey,
-      });
+        createdAt: Date.now(),
+        requestKey: data.requestKey || String(Date.now()),
+        usedItems: data.usedItems,
+      };
 
-      setMsg(`Generated ${qtyParsed} card(s). Caller pool synced (${usedItems.length} unique items).`);
+      setPack(nextPack);
+
+      // Option B: if API returns usedItems, store those as the shared pool for Caller
+      if (Array.isArray(data.usedItems) && data.usedItems.length) {
+        try {
+          window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
+        } catch {
+          // ignore
+        }
+      }
     } catch (e: any) {
-      setMsg(e?.message || "Failed to generate.");
+      setError(e?.message || "Generate failed.");
     } finally {
-      setBusy(false);
+      setIsGenerating(false);
     }
   }
 
-  function downloadPdf() {
-    if (!pack) return;
-    const safeTitle =
-      (packTitle || "bingo-pack").replace(/[^a-z0-9\-_\s]/gi, "").trim() || "bingo-pack";
-    downloadBase64Pdf(`${safeTitle}-${pack.requestKey}.pdf`, pack.pdfBase64);
+  function downloadBase64Pdf() {
+    if (!pack?.pdfBase64) return;
+    const byteCharacters = atob(pack.pdfBase64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "application/pdf" });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(title || "bingo-pack").replace(/[^\w\-]+/g, "_")}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   function downloadCsv() {
-    if (!pack) return;
-    const safeTitle =
-      (packTitle || "bingo-roster").replace(/[^a-z0-9\-_\s]/gi, "").trim() || "bingo-roster";
+    if (!pack?.csv) return;
     const blob = new Blob([pack.csv], { type: "text/csv;charset=utf-8" });
-    downloadBlob(`${safeTitle}-${pack.requestKey}.csv`, blob);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(title || "bingo-roster").replace(/[^\w\-]+/g, "_")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -168,160 +189,191 @@ export default function GeneratorPage() {
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800 }}>Grower Bingo Generator</h1>
-        <div style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <Link
-            href="/caller"
-            style={{
-              display: "inline-block",
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: "#111827",
-              color: "white",
-              textDecoration: "none",
-            }}
-          >
-            Open Caller →
-          </Link>
-        </div>
-      </div>
+      <h1 style={{ marginTop: 0, fontSize: 32 }}>Grower Bingo Generator</h1>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Pack title</label>
-        <input
-          value={packTitle}
-          onChange={(e) => setPackTitle(e.target.value)}
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-
-        <div style={{ height: 12 }} />
-
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Sponsor name</label>
-        <input
-          value={sponsorName}
-          onChange={(e) => setSponsorName(e.target.value)}
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-
-        <div style={{ height: 12 }} />
-
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Banner image URL (top banner)</label>
-        <input
-          value={bannerImageUrl}
-          onChange={(e) => setBannerImageUrl(e.target.value)}
-          placeholder="https://..."
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-
-        <div style={{ height: 12 }} />
-
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Sponsor logo URL (FREE center square)</label>
-        <input
-          value={sponsorLogoUrl}
-          onChange={(e) => setSponsorLogoUrl(e.target.value)}
-          placeholder="https://..."
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-
-        <div style={{ height: 12 }} />
-
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Quantity (1–500)</label>
-        <input
-          value={quantity}
-          onChange={(e) => setQuantity(e.target.value)}
-          inputMode="numeric"
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-      </div>
-
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 800 }}>
-            Square pool items (one per line — need 24+). Current: {itemsCount}
-          </div>
-          <button
-            onClick={() => setItemsText(DEFAULT_ITEMS)}
-            style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #111827", background: "white" }}
-          >
-            Load defaults
-          </button>
-        </div>
-
-        <textarea
-          value={itemsText}
-          onChange={(e) => setItemsText(e.target.value)}
-          rows={12}
-          style={{
-            marginTop: 12,
-            width: "100%",
-            borderRadius: 10,
-            border: "1px solid #d1d5db",
-            padding: 12,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            fontSize: 14,
-          }}
-        />
-
-        <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
-          Caller pool sync key: <b>{SHARED_POOL_KEY}</b>
-        </div>
-      </div>
-
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <button
-            onClick={generatePack}
-            disabled={busy || itemsCount < 24}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: busy || itemsCount < 24 ? "#9ca3af" : "#111827",
-              color: "white",
-              cursor: busy || itemsCount < 24 ? "not-allowed" : "pointer",
-            }}
-          >
-            {busy ? "Generating…" : "Generate + Download PDF"}
-          </button>
-
-          <button
-            onClick={downloadCsv}
-            disabled={!pack}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: !pack ? "#9ca3af" : "white",
-              cursor: !pack ? "not-allowed" : "pointer",
-            }}
-          >
-            Download CSV (Roster)
-          </button>
-
-          {pack && (
-            <button
-              onClick={downloadPdf}
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Pack title</label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
               style={{
-                padding: "10px 14px",
+                width: "100%",
+                padding: 12,
                 borderRadius: 10,
+                border: "1px solid #d1d5db",
+                fontSize: 16,
+              }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Sponsor name</label>
+            <input
+              value={sponsorName}
+              onChange={(e) => setSponsorName(e.target.value)}
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                fontSize: 16,
+              }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+              Banner image URL (top banner)
+            </label>
+            <input
+              value={bannerImageUrl}
+              onChange={(e) => setBannerImageUrl(e.target.value)}
+              placeholder="https://..."
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                fontSize: 16,
+              }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+              Sponsor logo URL (FREE center square)
+            </label>
+            <input
+              value={sponsorLogoUrl}
+              onChange={(e) => setSponsorLogoUrl(e.target.value)}
+              placeholder="https://..."
+              style={{
+                width: "100%",
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                fontSize: 16,
+              }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Quantity (1–500)</label>
+            <input
+              value={qtyInput}
+              onChange={(e) => setQtyInput(e.target.value)}
+              inputMode="numeric"
+              style={{
+                width: "100%",
+                maxWidth: 220,
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                fontSize: 16,
+              }}
+            />
+          </div>
+
+          <div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 700 }}>
+                Square pool items (one per line — need 24+). Current: {poolCount}
+              </div>
+
+              <button
+                onClick={loadDefaults}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #111827",
+                  background: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Load defaults
+              </button>
+            </div>
+
+            <textarea
+              value={itemsText}
+              onChange={(e) => setItemsText(e.target.value)}
+              rows={12}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                padding: 12,
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                fontSize: 14,
+              }}
+            />
+
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+              Caller pool sync key: <b>{SHARED_POOL_KEY}</b>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
+            <button
+              onClick={generatePack}
+              disabled={isGenerating}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
                 border: "1px solid #111827",
-                background: "white",
+                background: isGenerating ? "#9ca3af" : "#111827",
+                color: "white",
+                cursor: isGenerating ? "not-allowed" : "pointer",
+                minWidth: 220,
               }}
             >
-              Re-download PDF
+              {isGenerating ? "Generating..." : "Generate + Download PDF"}
             </button>
-          )}
-        </div>
 
-        {itemsCount < 24 && (
-          <div style={{ marginTop: 10, color: "#b91c1c" }}>
-            Need at least 24 items in the pool (center is FREE).
+            <button
+              onClick={downloadCsv}
+              disabled={!pack}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #111827",
+                background: !pack ? "#9ca3af" : "white",
+                cursor: !pack ? "not-allowed" : "pointer",
+                minWidth: 220,
+              }}
+            >
+              Download CSV (Roster)
+            </button>
+
+            <a
+              href="/caller"
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #111827",
+                background: "white",
+                textDecoration: "none",
+                color: "#111827",
+                display: "inline-block",
+              }}
+            >
+              Open Caller
+            </a>
           </div>
-        )}
 
-        {msg && <div style={{ marginTop: 10, color: "#111827" }}>{msg}</div>}
+          {error ? (
+            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div>
+          ) : null}
+
+          {pack ? (
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+              Pack generated. You can re-download the PDF from the button above, and download the roster CSV anytime.
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
