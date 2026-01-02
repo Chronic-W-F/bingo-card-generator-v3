@@ -1,4 +1,5 @@
 // app/api/generate/route.ts
+import React from "react";
 import { NextResponse } from "next/server";
 import { renderToBuffer } from "@react-pdf/renderer";
 import BingoPackPdf from "@/pdf/BingoPackPdf";
@@ -34,8 +35,6 @@ function csvEscape(s: string) {
 }
 
 function buildRosterCsv(cards: BingoCard[]) {
-  // Simple, useful roster:
-  // CardId, then 25 cells (row-major) so you can search/verify quickly
   const header = ["cardId"];
   for (let i = 1; i <= 25; i++) header.push(`cell${i}`);
 
@@ -61,7 +60,7 @@ export async function POST(req: Request) {
 
     const qty = clamp(safeInt(body?.qty, 25), 1, 500);
 
-    // IMPORTANT: we expect an array of strings from the client now
+    // Expect array of strings from client
     const items = normalizeItems(body?.items);
 
     if (items.length < 24) {
@@ -73,25 +72,21 @@ export async function POST(req: Request) {
       );
     }
 
-    // lib/bingo decides the exact weekly pool + unique cards
-    // Keep it as the single source of truth
     const pack = createBingoPackFromMasterPool(items, qty);
-
-    // Support either { cards } or { cards: BingoCard[] }
     const cards: BingoCard[] = (pack?.cards ?? []) as BingoCard[];
 
     if (!Array.isArray(cards) || cards.length === 0) {
       return NextResponse.json({ error: "No cards were generated." }, { status: 500 });
     }
 
-    // Build PDF buffer
-    // (BingoPackPdf currently only needs { cards } per your baseline)
-    const pdfBuffer = await renderToBuffer(<BingoPackPdf cards={cards as any} />);
+    // ✅ NO JSX in .ts file
+    const pdfBuffer = await renderToBuffer(
+      React.createElement(BingoPackPdf as any, { cards })
+    );
 
     const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
     const csv = buildRosterCsv(cards);
 
-    // usedItems helps Caller sync only to items actually on the cards
     const usedItems = Array.isArray((pack as any)?.usedItems) ? (pack as any).usedItems : [];
 
     return NextResponse.json({
@@ -107,9 +102,7 @@ export async function POST(req: Request) {
     });
   } catch (err: any) {
     return NextResponse.json(
-      {
-        error: err?.message || "Server error generating pack.",
-      },
+      { error: err?.message || "Server error generating pack." },
       { status: 500 }
     );
   }
