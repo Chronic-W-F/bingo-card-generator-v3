@@ -6,6 +6,9 @@ import Link from "next/link";
 const SHARED_POOL_KEY = "grower-bingo:pool:v1";
 const CALLER_STATE_KEY = "grower-bingo:caller:v1";
 
+// ✅ Change this if your generator lives somewhere else
+const GENERATOR_URL = "https://grower-bingo-generator.vercel.app/";
+
 type CallerState = {
   poolText: string;
   deckSize: number;
@@ -64,10 +67,17 @@ export default function CallerPage() {
 
   // ---------- Load on mount ----------
   useEffect(() => {
-    const shared = typeof window !== "undefined" ? window.localStorage.getItem(SHARED_POOL_KEY) : null;
+    const shared =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(SHARED_POOL_KEY)
+        : null;
     const sharedText = shared ?? "";
 
-    const rawState = typeof window !== "undefined" ? window.localStorage.getItem(CALLER_STATE_KEY) : null;
+    const rawState =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(CALLER_STATE_KEY)
+        : null;
+
     if (rawState) {
       try {
         const s = JSON.parse(rawState) as CallerState;
@@ -76,8 +86,10 @@ export default function CallerPage() {
         setPoolText(restoredPoolText);
 
         // Restore input strings exactly (this fixes the “stuck 1” typing behavior)
-        const restoredDeckInput = (s.deckSizeInput ?? "").trim() || String(s.deckSize ?? 50);
-        const restoredDrawInput = (s.drawSizeInput ?? "").trim() || String(s.drawSize ?? 10);
+        const restoredDeckInput =
+          (s.deckSizeInput ?? "").trim() || String(s.deckSize ?? 50);
+        const restoredDrawInput =
+          (s.drawSizeInput ?? "").trim() || String(s.drawSize ?? 10);
         setDeckSizeInput(restoredDeckInput);
         setDrawSizeInput(restoredDrawInput);
 
@@ -126,7 +138,17 @@ export default function CallerPage() {
     } catch {
       // ignore
     }
-  }, [poolText, deckSize, drawSize, deckSizeInput, drawSizeInput, round, deck, called, draws]);
+  }, [
+    poolText,
+    deckSize,
+    drawSize,
+    deckSizeInput,
+    drawSizeInput,
+    round,
+    deck,
+    called,
+    draws,
+  ]);
 
   function reloadSharedPool() {
     const shared = window.localStorage.getItem(SHARED_POOL_KEY) ?? "";
@@ -217,12 +239,20 @@ export default function CallerPage() {
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
         <h1 style={{ margin: 0, fontSize: 24 }}>Grower Bingo — Caller</h1>
 
         <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <Link
-            href="/"
+          {/* ✅ Absolute URL so it ALWAYS goes to the real Generator */}
+          <a
+            href={GENERATOR_URL}
             style={{
               display: "inline-block",
               padding: "10px 14px",
@@ -234,19 +264,16 @@ export default function CallerPage() {
             }}
           >
             ← Back to Generator
-          </Link>
+          </a>
 
-          <button
-            onClick={reloadSharedPool}
-            style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111827", background: "white" }}
-          >
-            Reload shared pool
-          </button>
+          {/* ❌ Removed the duplicate reload button up here */}
         </div>
       </div>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Topic Pool (one per line) — Current: {poolCount}</h2>
+        <h2 style={{ margin: 0, fontSize: 18 }}>
+          Topic Pool (one per line) — Current: {poolCount}
+        </h2>
 
         <textarea
           value={poolText}
@@ -258,19 +285,39 @@ export default function CallerPage() {
             borderRadius: 10,
             border: "1px solid #d1d5db",
             padding: 12,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
             fontSize: 14,
           }}
           placeholder="One item per line"
         />
 
+        {/* ✅ Keep exactly ONE reload button (this one) */}
+        <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button
+            onClick={reloadSharedPool}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+            }}
+          >
+            Reload shared pool
+          </button>
+        </div>
+
         <div style={{ marginTop: 12, fontSize: 13, color: "#374151" }}>
-          Note: This page reads the shared pool from localStorage key <b>{SHARED_POOL_KEY}</b>. When you generate a pack, the Generator syncs the caller pool automatically.
+          Note: This page reads the shared pool from localStorage key{" "}
+          <b>{SHARED_POOL_KEY}</b>. When you generate a pack, the Generator syncs
+          the caller pool automatically.
         </div>
       </div>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Deck size</label>
+        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+          Deck size
+        </label>
         <input
           value={deckSizeInput}
           onChange={(e) => setDeckSizeInput(e.target.value)}
@@ -290,7 +337,9 @@ export default function CallerPage() {
 
         <div style={{ height: 12 }} />
 
-        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Draw size</label>
+        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+          Draw size
+        </label>
         <input
           value={drawSizeInput}
           onChange={(e) => setDrawSizeInput(e.target.value)}
@@ -326,7 +375,12 @@ export default function CallerPage() {
 
           <button
             onClick={resetGame}
-            style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111827", background: "white" }}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+            }}
           >
             Reset
           </button>
@@ -339,7 +393,8 @@ export default function CallerPage() {
               borderRadius: 10,
               border: "1px solid #111827",
               background: !hasGame || remainingCount === 0 ? "#9ca3af" : "white",
-              cursor: !hasGame || remainingCount === 0 ? "not-allowed" : "pointer",
+              cursor:
+                !hasGame || remainingCount === 0 ? "not-allowed" : "pointer",
             }}
           >
             Next draw
@@ -368,12 +423,16 @@ export default function CallerPage() {
         <h2 style={{ margin: 0, fontSize: 18 }}>Draw history</h2>
 
         {!draws.length ? (
-          <div style={{ marginTop: 10, color: "#6b7280" }}>No draws yet. Start a game, then press Next draw.</div>
+          <div style={{ marginTop: 10, color: "#6b7280" }}>
+            No draws yet. Start a game, then press Next draw.
+          </div>
         ) : (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
             {draws.map((batch, idx) => (
               <div key={idx} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>Round {idx + 1}</div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                  Round {idx + 1}
+                </div>
                 <div style={{ lineHeight: 1.6 }}>
                   {batch.map((item) => (
                     <div key={item}>{item}</div>
