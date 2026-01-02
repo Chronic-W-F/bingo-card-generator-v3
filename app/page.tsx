@@ -4,10 +4,9 @@ import React, { useMemo, useState } from "react";
 import Link from "next/link";
 
 type ApiResponse = {
-  pdfBase64: string; // base64 string (no data: prefix)
+  pdfBase64: string;
   csv: string;
   usedItems?: string[];
-  weeklyPool?: string[];
   createdAt?: number;
   requestKey?: string;
   error?: string;
@@ -68,7 +67,6 @@ function downloadBlob(filename: string, blob: Blob) {
 }
 
 function downloadBase64Pdf(filename: string, base64: string) {
-  // base64 -> bytes
   const bin = atob(base64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -82,7 +80,7 @@ export default function GeneratorPage() {
   const [bannerImageUrl, setBannerImageUrl] = useState("");
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
 
-  const [quantity, setQuantity] = useState<string>("25");
+  const [quantity, setQuantity] = useState("25");
   const qtyParsed = useMemo(() => {
     const n = Number.parseInt((quantity || "").trim(), 10);
     if (!Number.isFinite(n)) return 25;
@@ -93,7 +91,7 @@ export default function GeneratorPage() {
   const itemsCount = useMemo(() => normalizeLines(itemsText).length, [itemsText]);
 
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string>("");
+  const [msg, setMsg] = useState("");
   const [pack, setPack] = useState<GeneratedPack | null>(null);
 
   async function generatePack() {
@@ -124,22 +122,20 @@ export default function GeneratorPage() {
       const createdAt = typeof data.createdAt === "number" ? data.createdAt : Date.now();
       const requestKey = typeof data.requestKey === "string" ? data.requestKey : String(Date.now());
 
-      // Option B: Sync caller pool to EXACT items on generated cards
       try {
         window.localStorage.setItem(SHARED_POOL_KEY, usedItems.join("\n"));
       } catch {
         // ignore
       }
 
-      const nextPack: GeneratedPack = {
+      setPack({
         pdfBase64: data.pdfBase64,
         csv: data.csv,
         usedItems,
         createdAt,
         requestKey,
-      };
+      });
 
-      setPack(nextPack);
       setMsg(`Generated ${qtyParsed} card(s). Caller pool synced (${usedItems.length} unique items).`);
     } catch (e: any) {
       setMsg(e?.message || "Failed to generate.");
@@ -150,13 +146,15 @@ export default function GeneratorPage() {
 
   function downloadPdf() {
     if (!pack) return;
-    const safeTitle = (packTitle || "bingo-pack").replace(/[^a-z0-9\-_\s]/gi, "").trim() || "bingo-pack";
+    const safeTitle =
+      (packTitle || "bingo-pack").replace(/[^a-z0-9\-_\s]/gi, "").trim() || "bingo-pack";
     downloadBase64Pdf(`${safeTitle}-${pack.requestKey}.pdf`, pack.pdfBase64);
   }
 
   function downloadCsv() {
     if (!pack) return;
-    const safeTitle = (packTitle || "bingo-roster").replace(/[^a-z0-9\-_\s]/gi, "").trim() || "bingo-roster";
+    const safeTitle =
+      (packTitle || "bingo-roster").replace(/[^a-z0-9\-_\s]/gi, "").trim() || "bingo-roster";
     const blob = new Blob([pack.csv], { type: "text/csv;charset=utf-8" });
     downloadBlob(`${safeTitle}-${pack.requestKey}.csv`, blob);
   }
@@ -217,4 +215,114 @@ export default function GeneratorPage() {
           style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
         />
 
-        <div style={{ height: 12 }}
+        <div style={{ height: 12 }} />
+
+        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Sponsor logo URL (FREE center square)</label>
+        <input
+          value={sponsorLogoUrl}
+          onChange={(e) => setSponsorLogoUrl(e.target.value)}
+          placeholder="https://..."
+          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
+        />
+
+        <div style={{ height: 12 }} />
+
+        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Quantity (1–500)</label>
+        <input
+          value={quantity}
+          onChange={(e) => setQuantity(e.target.value)}
+          inputMode="numeric"
+          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
+        />
+      </div>
+
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800 }}>
+            Square pool items (one per line — need 24+). Current: {itemsCount}
+          </div>
+          <button
+            onClick={() => setItemsText(DEFAULT_ITEMS)}
+            style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #111827", background: "white" }}
+          >
+            Load defaults
+          </button>
+        </div>
+
+        <textarea
+          value={itemsText}
+          onChange={(e) => setItemsText(e.target.value)}
+          rows={12}
+          style={{
+            marginTop: 12,
+            width: "100%",
+            borderRadius: 10,
+            border: "1px solid #d1d5db",
+            padding: 12,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontSize: 14,
+          }}
+        />
+
+        <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
+          Caller pool sync key: <b>{SHARED_POOL_KEY}</b>
+        </div>
+      </div>
+
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button
+            onClick={generatePack}
+            disabled={busy || itemsCount < 24}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: busy || itemsCount < 24 ? "#9ca3af" : "#111827",
+              color: "white",
+              cursor: busy || itemsCount < 24 ? "not-allowed" : "pointer",
+            }}
+          >
+            {busy ? "Generating…" : "Generate + Download PDF"}
+          </button>
+
+          <button
+            onClick={downloadCsv}
+            disabled={!pack}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: !pack ? "#9ca3af" : "white",
+              cursor: !pack ? "not-allowed" : "pointer",
+            }}
+          >
+            Download CSV (Roster)
+          </button>
+
+          {pack && (
+            <button
+              onClick={downloadPdf}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid #111827",
+                background: "white",
+              }}
+            >
+              Re-download PDF
+            </button>
+          )}
+        </div>
+
+        {itemsCount < 24 && (
+          <div style={{ marginTop: 10, color: "#b91c1c" }}>
+            Need at least 24 items in the pool (center is FREE).
+          </div>
+        )}
+
+        {msg && <div style={{ marginTop: 10, color: "#111827" }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
