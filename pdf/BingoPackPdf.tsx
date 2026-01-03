@@ -11,27 +11,24 @@ type BingoCard = {
 type Props = {
   cards: BingoCard[];
   gridSize?: number;
-  sponsorImage?: string; // keep for later
-  bannerImageUrl?: string; // ✅ add support
-  title?: string; // ✅ add support
+  sponsorImage?: string; // kept for later
+  bannerImageUrl?: string;
+  title?: string;
 };
 
-// Layout constants (LETTER)
 const PAGE_PADDING = 36;
-const CONTENT_WIDTH = 540; // approx usable width after padding
-const CONTENT_HEIGHT = 720; // approx usable height after padding
+const CONTENT_WIDTH = 540;
 
-const MAX_ICONS_PER_CARD = 10; // your requirement
+const MAX_ICONS_PER_CARD = 10;
 
-// ✅ Banner tuning (smaller / less crop)
-const BANNER_HEIGHT = 64; // was effectively taller before; this tightens it up
+// Banner tuning: keep readable and NEVER crop
+const BANNER_HEIGHT = 70;
 const BANNER_MARGIN_BOTTOM = 10;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-// --- Deterministic hash + seeded shuffle (so same Card ID always picks same 10) ---
 function hashString(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -46,7 +43,6 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   let x = seed || 1;
 
   for (let i = a.length - 1; i > 0; i--) {
-    // xorshift32
     x ^= x << 13;
     x >>>= 0;
     x ^= x >> 17;
@@ -60,40 +56,24 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   return a;
 }
 
-// If ICON_MAP value is a URL or /icons/... path, return it.
-// If it's empty or looks wrong, return null.
 function safeIconSrc(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const v = value.trim();
   if (!v) return null;
 
-  // allow absolute URLs or public paths like "/icons/foo.png"
   if (v.startsWith("http://") || v.startsWith("https://") || v.startsWith("/")) return v;
-
-  // allow "icons/foo.png" (normalize to "/icons/foo.png")
   if (v.startsWith("icons/")) return `/${v}`;
 
   return null;
 }
 
-export default function BingoPackPdf({
-  cards,
-  gridSize: gridSizeProp,
-  bannerImageUrl,
-  title,
-}: Props) {
+export default function BingoPackPdf({ cards, gridSize: gridSizeProp, bannerImageUrl, title }: Props) {
   const inferred = cards?.[0]?.grid?.length ?? 5;
   const gridSize = (gridSizeProp ?? inferred) as number;
 
   const cellSize = clamp(Math.floor(CONTENT_WIDTH / gridSize), 70, 110);
   const gridWidth = cellSize * gridSize;
   const gridHeight = cellSize * gridSize;
-
-  // header space depends on whether banner is present
-  const headerBlock = (bannerImageUrl ? BANNER_HEIGHT + BANNER_MARGIN_BOTTOM : 0) + 46;
-
-  // center the grid vertically-ish (leave room for header)
-  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - headerBlock - gridHeight) / 2));
 
   const styles = StyleSheet.create({
     page: {
@@ -106,14 +86,26 @@ export default function BingoPackPdf({
     },
     header: {
       alignItems: "center",
-      marginBottom: 8,
+      marginBottom: 12,
     },
-    banner: {
+
+    // Wrap gives us a clean box for the banner
+    bannerWrap: {
       width: "100%",
       height: BANNER_HEIGHT,
       marginBottom: BANNER_MARGIN_BOTTOM,
-      objectFit: "cover", // ✅ key: fill width and crop less aggressively since height is smaller
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "#ffffff",
     },
+
+    // ✅ "contain" prevents cropping entirely
+    banner: {
+      width: "100%",
+      height: "100%",
+      objectFit: "contain",
+    },
+
     title: {
       fontSize: 16,
       fontWeight: "bold",
@@ -123,9 +115,7 @@ export default function BingoPackPdf({
       fontSize: 10,
       color: "#444",
     },
-    spacer: {
-      height: topPad,
-    },
+
     gridWrap: {
       width: gridWidth,
       height: gridHeight,
@@ -171,7 +161,7 @@ export default function BingoPackPdf({
       lineHeight: 1.15,
     },
     footer: {
-      marginTop: 16,
+      marginTop: 12,
       alignItems: "center",
       color: "#666",
       fontSize: 9,
@@ -183,13 +173,11 @@ export default function BingoPackPdf({
       {cards.map((card) => {
         const flatLabels = card.grid.flat();
 
-        // candidates are labels that actually have an icon mapping
         const candidates = flatLabels.filter((label) => {
           const src = safeIconSrc((ICON_MAP as any)[label]);
           return Boolean(src);
         });
 
-        // choose up to 10, deterministically based on card.id
         const seed = hashString(card.id);
         const chosenLabels = new Set(
           seededShuffle(candidates, seed).slice(0, Math.min(MAX_ICONS_PER_CARD, candidates.length))
@@ -198,13 +186,15 @@ export default function BingoPackPdf({
         return (
           <Page key={card.id} size="LETTER" style={styles.page}>
             <View style={styles.header}>
-              {bannerImageUrl ? <Image src={bannerImageUrl} style={styles.banner as any} /> : null}
+              {bannerImageUrl ? (
+                <View style={styles.bannerWrap}>
+                  <Image src={bannerImageUrl} style={styles.banner as any} />
+                </View>
+              ) : null}
 
               <Text style={styles.title}>{title || "Harvest Heroes Bingo"}</Text>
               <Text style={styles.sub}>Card ID: {card.id}</Text>
             </View>
-
-            <View style={styles.spacer} />
 
             <View style={styles.gridWrap}>
               {card.grid.map((row, rIdx) => {
