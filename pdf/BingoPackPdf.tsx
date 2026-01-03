@@ -11,20 +11,27 @@ type BingoCard = {
 type Props = {
   cards: BingoCard[];
   gridSize?: number;
-  title?: string;
-  bannerImageUrl?: string; // expects data URI now (recommended)
+  sponsorImage?: string; // keep for later
+  bannerImageUrl?: string; // ✅ add support
+  title?: string; // ✅ add support
 };
 
+// Layout constants (LETTER)
 const PAGE_PADDING = 36;
-const CONTENT_WIDTH = 540;
-const CONTENT_HEIGHT = 720;
+const CONTENT_WIDTH = 540; // approx usable width after padding
+const CONTENT_HEIGHT = 720; // approx usable height after padding
 
-const MAX_ICONS_PER_CARD = 10;
+const MAX_ICONS_PER_CARD = 10; // your requirement
+
+// ✅ Banner tuning (smaller / less crop)
+const BANNER_HEIGHT = 64; // was effectively taller before; this tightens it up
+const BANNER_MARGIN_BOTTOM = 10;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+// --- Deterministic hash + seeded shuffle (so same Card ID always picks same 10) ---
 function hashString(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -39,9 +46,13 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   let x = seed || 1;
 
   for (let i = a.length - 1; i > 0; i--) {
-    x ^= x << 13; x >>>= 0;
-    x ^= x >> 17; x >>>= 0;
-    x ^= x << 5;  x >>>= 0;
+    // xorshift32
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >> 17;
+    x >>>= 0;
+    x ^= x << 5;
+    x >>>= 0;
 
     const j = x % (i + 1);
     [a[i], a[j]] = [a[j], a[i]];
@@ -49,32 +60,28 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   return a;
 }
 
+// If ICON_MAP value is a URL or /icons/... path, return it.
+// If it's empty or looks wrong, return null.
 function safeIconSrc(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const v = value.trim();
   if (!v) return null;
 
+  // allow absolute URLs or public paths like "/icons/foo.png"
   if (v.startsWith("http://") || v.startsWith("https://") || v.startsWith("/")) return v;
+
+  // allow "icons/foo.png" (normalize to "/icons/foo.png")
   if (v.startsWith("icons/")) return `/${v}`;
 
   return null;
 }
 
-function safeBannerSrc(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const v = value.trim();
-  if (!v) return null;
-
-  // data URI is the reliable path
-  if (v.startsWith("data:image/")) return v;
-
-  // allow absolute as fallback
-  if (v.startsWith("http://") || v.startsWith("https://")) return v;
-
-  return null;
-}
-
-export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, bannerImageUrl }: Props) {
+export default function BingoPackPdf({
+  cards,
+  gridSize: gridSizeProp,
+  bannerImageUrl,
+  title,
+}: Props) {
   const inferred = cards?.[0]?.grid?.length ?? 5;
   const gridSize = (gridSizeProp ?? inferred) as number;
 
@@ -82,12 +89,11 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, ban
   const gridWidth = cellSize * gridSize;
   const gridHeight = cellSize * gridSize;
 
-  const bannerSrc = safeBannerSrc(bannerImageUrl);
-  const hasBanner = Boolean(bannerSrc);
-  const bannerHeight = hasBanner ? 130 : 0;
+  // header space depends on whether banner is present
+  const headerBlock = (bannerImageUrl ? BANNER_HEIGHT + BANNER_MARGIN_BOTTOM : 0) + 46;
 
-  const headerBlockHeight = (hasBanner ? bannerHeight + 14 : 0) + 36;
-  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - headerBlockHeight - gridHeight) / 2));
+  // center the grid vertically-ish (leave room for header)
+  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - headerBlock - gridHeight) / 2));
 
   const styles = StyleSheet.create({
     page: {
@@ -98,20 +104,15 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, ban
       fontSize: 10,
       fontFamily: "Helvetica",
     },
-    bannerWrap: {
-      width: CONTENT_WIDTH,
-      alignSelf: "center",
-      marginBottom: 10,
-    },
-    bannerImg: {
-      width: CONTENT_WIDTH,
-      height: bannerHeight,
-      objectFit: "cover",
-      borderRadius: 6,
-    },
     header: {
       alignItems: "center",
       marginBottom: 8,
+    },
+    banner: {
+      width: "100%",
+      height: BANNER_HEIGHT,
+      marginBottom: BANNER_MARGIN_BOTTOM,
+      objectFit: "cover", // ✅ key: fill width and crop less aggressively since height is smaller
     },
     title: {
       fontSize: 16,
@@ -182,11 +183,13 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, ban
       {cards.map((card) => {
         const flatLabels = card.grid.flat();
 
+        // candidates are labels that actually have an icon mapping
         const candidates = flatLabels.filter((label) => {
           const src = safeIconSrc((ICON_MAP as any)[label]);
           return Boolean(src);
         });
 
+        // choose up to 10, deterministically based on card.id
         const seed = hashString(card.id);
         const chosenLabels = new Set(
           seededShuffle(candidates, seed).slice(0, Math.min(MAX_ICONS_PER_CARD, candidates.length))
@@ -194,14 +197,10 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, ban
 
         return (
           <Page key={card.id} size="LETTER" style={styles.page}>
-            {hasBanner ? (
-              <View style={styles.bannerWrap}>
-                <Image src={bannerSrc as string} style={styles.bannerImg as any} />
-              </View>
-            ) : null}
-
             <View style={styles.header}>
-              <Text style={styles.title}>{title || "Grower Bingo"}</Text>
+              {bannerImageUrl ? <Image src={bannerImageUrl} style={styles.banner as any} /> : null}
+
+              <Text style={styles.title}>{title || "Harvest Heroes Bingo"}</Text>
               <Text style={styles.sub}>Card ID: {card.id}</Text>
             </View>
 
@@ -216,18 +215,17 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, ban
                     {row.map((label, cIdx) => {
                       const isLastCol = cIdx === row.length - 1;
 
+                      const cellStyle = [
+                        styles.cell,
+                        isLastCol ? styles.cellLastCol : null,
+                        isLastRow ? styles.cellLastRow : null,
+                      ];
+
                       const iconSrc = safeIconSrc((ICON_MAP as any)[label]);
                       const showIcon = Boolean(iconSrc) && chosenLabels.has(label);
 
                       return (
-                        <View
-                          key={`c-${card.id}-${rIdx}-${cIdx}`}
-                          style={[
-                            styles.cell,
-                            isLastCol ? styles.cellLastCol : null,
-                            isLastRow ? styles.cellLastRow : null,
-                          ] as any}
-                        >
+                        <View key={`c-${card.id}-${rIdx}-${cIdx}`} style={cellStyle as any}>
                           <View style={styles.cellInner}>
                             {showIcon ? <Image src={iconSrc as string} style={styles.iconImg as any} /> : null}
                             <Text style={styles.label}>{label}</Text>
