@@ -11,6 +11,11 @@ type BingoCard = {
 type Props = {
   cards: BingoCard[];
   gridSize?: number;
+
+  // ✅ New: banner URL served from /public
+  // Example: "/banners/joes-grows.png"
+  bannerImageUrl?: string;
+
   sponsorImage?: string; // keep for later
 };
 
@@ -20,6 +25,11 @@ const CONTENT_WIDTH = 540;  // approx usable width after padding
 const CONTENT_HEIGHT = 720; // approx usable height after padding
 
 const MAX_ICONS_PER_CARD = 10; // ✅ your requirement
+
+// Banner constants
+const BANNER_HEIGHT = 90;
+const HEADER_TEXT_HEIGHT_EST = 38; // Grower Bingo + Card ID + margin-ish
+const HEADER_GAP = 10; // space below banner/header section
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -68,7 +78,11 @@ function safeIconSrc(value: unknown): string | null {
   return null;
 }
 
-export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
+export default function BingoPackPdf({
+  cards,
+  gridSize: gridSizeProp,
+  bannerImageUrl,
+}: Props) {
   const inferred = cards?.[0]?.grid?.length ?? 5;
   const gridSize = (gridSizeProp ?? inferred) as number;
 
@@ -76,8 +90,15 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
   const gridWidth = cellSize * gridSize;
   const gridHeight = cellSize * gridSize;
 
-  // center the grid vertically-ish (leave room for header)
-  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - 90 - gridHeight) / 2));
+  // Compute how much vertical space the "top section" uses
+  // If bannerImageUrl exists, reserve BANNER_HEIGHT.
+  const topSectionHeight =
+    (bannerImageUrl ? BANNER_HEIGHT : 0) +
+    HEADER_TEXT_HEIGHT_EST +
+    HEADER_GAP;
+
+  // Center the grid vertically-ish within remaining space
+  const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - topSectionHeight - gridHeight) / 2));
 
   const styles = StyleSheet.create({
     page: {
@@ -88,9 +109,25 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
       fontSize: 10,
       fontFamily: "Helvetica",
     },
+
+    // Banner strip
+    bannerWrap: {
+      width: CONTENT_WIDTH,
+      height: BANNER_HEIGHT,
+      alignSelf: "center",
+      borderRadius: 10,
+      overflow: "hidden",
+      marginBottom: 10,
+    },
+    bannerImg: {
+      width: "100%",
+      height: "100%",
+      objectFit: "cover",
+    },
+
     header: {
       alignItems: "center",
-      marginBottom: 8,
+      marginBottom: HEADER_GAP,
     },
     title: {
       fontSize: 16,
@@ -101,9 +138,11 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
       fontSize: 10,
       color: "#444",
     },
+
     spacer: {
       height: topPad,
     },
+
     gridWrap: {
       width: gridWidth,
       height: gridHeight,
@@ -138,6 +177,7 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
       alignItems: "center",
       justifyContent: "center",
     },
+
     // icon image box (kept small so it doesn't overpower text)
     iconImg: {
       width: Math.max(22, Math.floor(cellSize * 0.28)),
@@ -177,6 +217,14 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
 
         return (
           <Page key={card.id} size="LETTER" style={styles.page}>
+            {/* ✅ Banner */}
+            {bannerImageUrl ? (
+              <View style={styles.bannerWrap}>
+                <Image src={bannerImageUrl} style={styles.bannerImg as any} />
+              </View>
+            ) : null}
+
+            {/* Header text */}
             <View style={styles.header}>
               <Text style={styles.title}>Grower Bingo</Text>
               <Text style={styles.sub}>Card ID: {card.id}</Text>
@@ -206,10 +254,7 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp }: Props) {
                         <View key={`c-${card.id}-${rIdx}-${cIdx}`} style={cellStyle as any}>
                           <View style={styles.cellInner}>
                             {showIcon ? (
-                              <Image
-                                src={iconSrc as string}
-                                style={styles.iconImg as any}
-                              />
+                              <Image src={iconSrc as string} style={styles.iconImg as any} />
                             ) : null}
 
                             <Text style={styles.label}>{label}</Text>
