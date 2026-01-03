@@ -12,7 +12,7 @@ type Props = {
   cards: BingoCard[];
   gridSize?: number;
   title?: string;
-  bannerImageUrl?: string; // absolute URL preferred
+  bannerImageUrl?: string; // expects data URI now (recommended)
 };
 
 const PAGE_PADDING = 36;
@@ -25,7 +25,6 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-// deterministic hash + seeded shuffle
 function hashString(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -66,11 +65,11 @@ function safeBannerSrc(value: unknown): string | null {
   const v = value.trim();
   if (!v) return null;
 
-  // for react-pdf in node, absolute URL is best
-  if (v.startsWith("http://") || v.startsWith("https://")) return v;
-
-  // allow data URIs too
+  // data URI is the reliable path
   if (v.startsWith("data:image/")) return v;
+
+  // allow absolute as fallback
+  if (v.startsWith("http://") || v.startsWith("https://")) return v;
 
   return null;
 }
@@ -85,10 +84,8 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, title, ban
 
   const bannerSrc = safeBannerSrc(bannerImageUrl);
   const hasBanner = Boolean(bannerSrc);
-
   const bannerHeight = hasBanner ? 130 : 0;
 
-  // Leave room for banner + title block
   const headerBlockHeight = (hasBanner ? bannerHeight + 14 : 0) + 36;
   const topPad = Math.max(0, Math.floor((CONTENT_HEIGHT - headerBlockHeight - gridHeight) / 2));
 
