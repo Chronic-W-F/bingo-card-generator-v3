@@ -82,7 +82,7 @@ function downloadTextFile(filename: string, text: string, mime = "text/plain;cha
 export default function Page() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
-  const [bannerImageUrl, setBannerImageUrl] = useState("");
+  const [bannerImageUrl, setBannerImageUrl] = useState("/banners/joes-grows.png");
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
   const [qtyInput, setQtyInput] = useState("25");
 
