@@ -14,6 +14,8 @@ type Props = {
   sponsorImage?: string; // kept for later
   bannerImageUrl?: string;
   title?: string;
+
+  sponsorName?: string; // ✅ ADD THIS
 };
 
 const PAGE_PADDING = 36;
@@ -67,7 +69,13 @@ function safeIconSrc(value: unknown): string | null {
   return null;
 }
 
-export default function BingoPackPdf({ cards, gridSize: gridSizeProp, bannerImageUrl, title }: Props) {
+export default function BingoPackPdf({
+  cards,
+  gridSize: gridSizeProp,
+  bannerImageUrl,
+  title,
+  sponsorName, // ✅ RECEIVE IT
+}: Props) {
   const inferred = cards?.[0]?.grid?.length ?? 5;
   const gridSize = (gridSizeProp ?? inferred) as number;
 
@@ -193,6 +201,10 @@ export default function BingoPackPdf({ cards, gridSize: gridSizeProp, bannerImag
               ) : null}
 
               <Text style={styles.title}>{title || "Harvest Heroes Bingo"}</Text>
+
+              {/* ✅ OPTIONAL: display sponsorName if present */}
+              {sponsorName ? <Text style={styles.sub}>Sponsor: {sponsorName}</Text> : null}
+
               <Text style={styles.sub}>Card ID: {card.id}</Text>
             </View>
 
