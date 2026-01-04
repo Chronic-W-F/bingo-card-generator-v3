@@ -10,19 +10,21 @@ type BingoCard = {
 type Props = {
   cards: BingoCard[];
   gridSize?: number;
-
-  // Banner sources (either works)
-  bannerImageUrl?: string; // can be data URI, https URL, or /path (if your pipeline supports it)
-  sponsorImage?: string; // legacy/alternate banner source (data URI or https URL)
-
   title?: string;
   sponsorName?: string;
+
+  // Banner image as a data URI (preferred) or https URL.
+  // Your API already converts /public/banners/current.png into a data URI.
+  bannerImage?: string;
+
+  // If you still pass a URL from client sometimes, keep this too (optional).
+  // bannerImageUrl?: string;
 };
 
 const PAGE_PADDING = 36;
 const CONTENT_WIDTH = 540;
 
-// Banner tuning: readable and never crop
+// Banner tuning: readable and never cropped
 const BANNER_HEIGHT = 70;
 const BANNER_MARGIN_BOTTOM = 10;
 
@@ -33,10 +35,9 @@ function clamp(n: number, min: number, max: number) {
 export default function BingoPackPdf({
   cards,
   gridSize: gridSizeProp,
-  bannerImageUrl,
-  sponsorImage,
   title,
   sponsorName,
+  bannerImage,
 }: Props) {
   const inferred = cards?.[0]?.grid?.length ?? 5;
   const gridSize = (gridSizeProp ?? inferred) as number;
@@ -44,9 +45,6 @@ export default function BingoPackPdf({
   const cellSize = clamp(Math.floor(CONTENT_WIDTH / gridSize), 70, 110);
   const gridWidth = cellSize * gridSize;
   const gridHeight = cellSize * gridSize;
-
-  // ✅ FIX: render banner from either prop (API currently produces a data URI into sponsorImage)
-  const bannerSrc = bannerImageUrl || sponsorImage;
 
   const styles = StyleSheet.create({
     page: {
@@ -57,6 +55,7 @@ export default function BingoPackPdf({
       fontSize: 10,
       fontFamily: "Helvetica",
     },
+
     header: {
       alignItems: "center",
       marginBottom: 12,
@@ -71,7 +70,6 @@ export default function BingoPackPdf({
       backgroundColor: "#ffffff",
     },
 
-    // ✅ contain prevents cropping
     banner: {
       width: "100%",
       height: "100%",
@@ -81,13 +79,13 @@ export default function BingoPackPdf({
     title: {
       fontSize: 16,
       fontWeight: "bold",
-      marginBottom: 4,
-      textAlign: "center",
+      marginBottom: 2,
     },
+
     sub: {
       fontSize: 10,
       color: "#444",
-      textAlign: "center",
+      marginBottom: 2,
     },
 
     gridWrap: {
@@ -97,11 +95,13 @@ export default function BingoPackPdf({
       borderWidth: 2,
       borderColor: "#000",
     },
+
     row: {
       flexDirection: "row",
       width: gridWidth,
       height: cellSize,
     },
+
     cell: {
       width: cellSize,
       height: cellSize,
@@ -112,12 +112,15 @@ export default function BingoPackPdf({
       justifyContent: "center",
       padding: 6,
     },
+
     cellLastCol: {
       borderRightWidth: 0,
     },
+
     cellLastRow: {
       borderBottomWidth: 0,
     },
+
     label: {
       fontSize: 10,
       textAlign: "center",
@@ -126,9 +129,20 @@ export default function BingoPackPdf({
 
     footer: {
       marginTop: 12,
+      flexDirection: "row",
+      justifyContent: "space-between",
       alignItems: "center",
-      color: "#111",
+    },
+
+    footerLeft: {
       fontSize: 9,
+      color: "#444",
+    },
+
+    footerRight: {
+      fontSize: 9,
+      color: "#111",
+      fontWeight: "bold",
     },
   });
 
@@ -137,13 +151,17 @@ export default function BingoPackPdf({
       {cards.map((card) => (
         <Page key={card.id} size="LETTER" style={styles.page}>
           <View style={styles.header}>
-            {bannerSrc ? (
+            {bannerImage ? (
               <View style={styles.bannerWrap}>
-                <Image src={bannerSrc} style={styles.banner as any} />
+                <Image src={bannerImage} style={styles.banner as any} />
               </View>
             ) : null}
 
             <Text style={styles.title}>{title || "Harvest Heroes Bingo"}</Text>
+
+            {/* NEW: Lights Out label (blackout rules) */}
+            <Text style={styles.sub}>Lights Out Bingo (Blackout)</Text>
+
             {sponsorName ? <Text style={styles.sub}>Sponsor: {sponsorName}</Text> : null}
           </View>
 
@@ -173,8 +191,10 @@ export default function BingoPackPdf({
             })}
           </View>
 
+          {/* Footer: move Card ID to bottom. Remove the old “10 icons” text entirely. */}
           <View style={styles.footer}>
-            <Text>Card ID: {card.id}</Text>
+            <Text style={styles.footerLeft}>Text labels are the source of truth.</Text>
+            <Text style={styles.footerRight}>Card ID: {card.id}</Text>
           </View>
         </Page>
       ))}
