@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { createBingoPackFromMasterPool } from "@/lib/bingo";
 import { renderToBuffer } from "@react-pdf/renderer";
 import BingoPackPdf from "@/pdf/BingoPackPdf";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 
@@ -15,10 +17,33 @@ type Body = {
 
   sponsorName?: string;
 
-  // Generator currently sends these, even if PDF ignores them today
+  // Generator sends these
   bannerImageUrl?: string; // e.g. "/banners/current.png"
-  sponsorLogoUrl?: string; // e.g. "https://..."
+  sponsorLogoUrl?: string; // e.g. "https://..." (not used yet in PDF)
 };
+
+// Reads a file under /public and returns a data URI string (best for react-pdf Image)
+async function readPublicAsDataUri(publicPath: string): Promise<string | null> {
+  try {
+    const clean = publicPath.startsWith("/") ? publicPath.slice(1) : publicPath;
+    const abs = path.join(process.cwd(), "public", clean);
+    const buf = await fs.readFile(abs);
+
+    const ext = path.extname(clean).toLowerCase();
+    const mime =
+      ext === ".png"
+        ? "image/png"
+        : ext === ".jpg" || ext === ".jpeg"
+          ? "image/jpeg"
+          : ext === ".webp"
+            ? "image/webp"
+            : "application/octet-stream";
+
+    return `data:${mime};base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -28,7 +53,10 @@ export async function POST(req: Request) {
 
     const qtyRaw =
       Number.isFinite(body.qty) ? Number(body.qty) : Number(body.quantity);
-    const safeQty = Math.max(1, Math.min(500, Number.isFinite(qtyRaw) ? qtyRaw : 25));
+    const safeQty = Math.max(
+      1,
+      Math.min(500, Number.isFinite(qtyRaw) ? qtyRaw : 25)
+    );
 
     const gridSize = (body.gridSize ?? 5) as 3 | 4 | 5;
 
@@ -51,6 +79,24 @@ export async function POST(req: Request) {
     const packId = `pack_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
     const createdAt = Date.now();
 
+    // --- Banner restore ---
+    // react-pdf is happiest with:
+    // - data URI (preferred)
+    // - absolute https URL (sometimes ok)
+    //
+    // Your weekly workflow is "replace public/banners/current.png" so default to that.
+    const bannerUrl = (body.bannerImageUrl ?? "/banners/current.png").toString();
+
+    let sponsorImage: string | undefined = undefined;
+
+    if (bannerUrl.startsWith("/")) {
+      // Read from /public and convert to data URI
+      sponsorImage = (await readPublicAsDataUri(bannerUrl)) ?? undefined;
+    } else if (bannerUrl.startsWith("https://") || bannerUrl.startsWith("http://")) {
+      // Allow absolute URLs too
+      sponsorImage = bannerUrl;
+    }
+
     // IMPORTANT:
     // - app/page.tsx expects pdfBase64 to be RAW base64 (no "data:application/pdf;base64,")
     //   because downloadBase64Pdf() calls atob(base64).
@@ -58,9 +104,7 @@ export async function POST(req: Request) {
       BingoPackPdf({
         title,
         sponsorName: body.sponsorName,
-        // If your PDF component later supports banner/logo, wire them here.
-        // For now we keep current props to avoid breaking builds.
-        sponsorImage: undefined,
+        sponsorImage, // ✅ banner restored here
         cards: pack.cards,
       }) as any
     );
@@ -73,12 +117,16 @@ export async function POST(req: Request) {
     const csv = csvLines.join("\n");
 
     // This is what the Generator + Caller/Winners need to persist
+    // Keep shape stable; you can add weeklyPool/usedItems later if desired.
     const cardsPack = {
       packId,
       createdAt,
       title,
       sponsorName: body.sponsorName,
       cards: pack.cards,
+      // Helpful to include these now; won’t break your existing generator code
+      weeklyPool: pack.weeklyPool,
+      usedItems: pack.usedItems,
     };
 
     // requestKey: use packId so filenames and winners urls stay consistent
