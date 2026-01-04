@@ -528,6 +528,8 @@ export default function Page() {
 
             <a
               href="/caller"
+              target="_blank"
+              rel="noreferrer"
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
@@ -538,7 +540,7 @@ export default function Page() {
                 display: "inline-block",
               }}
             >
-              Open Caller
+              Open Caller (new tab)
             </a>
 
             <button
@@ -562,4 +564,4 @@ export default function Page() {
       </div>
     </div>
   );
-      }
+}
