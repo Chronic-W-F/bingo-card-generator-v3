@@ -24,6 +24,7 @@ const SHARED_POOL_KEY = "grower-bingo:pool:v1";
 const LAST_GENERATED_PACK_KEY = "grower-bingo:lastGeneratedPack:v1";
 
 const DEFAULT_ITEMS = `Trellis net
+const DEFAULT_ITEMS = `Trellis net
 Lollipop
 Defoliate
 Stretch week
@@ -47,7 +48,91 @@ Powdery mildew
 Fungus gnats
 Bud rot
 Nute lockout
-Late flower fade`;
+Late flower fade
+Taco leaves
+Clawing
+Nitrogen toxicity
+Magnesium deficiency
+Calcium deficiency
+Iron deficiency
+Potassium deficiency
+Phosphorus deficiency
+Sulfur deficiency
+Zinc deficiency
+Manganese deficiency
+Boron deficiency
+Copper deficiency
+Molybdenum deficiency
+Root rot
+Slime roots
+Brown roots
+White roots
+Pythium
+Algae bloom
+Light leak
+Timer fail
+Pump fail
+Air pump fail
+Airstone clogged
+Low dissolved oxygen
+Water temp high
+Water temp low
+pH drift up
+pH drift down
+EC drift up
+EC drift down
+Res top-off
+Res change day
+Bubble bucket
+Aircube flood cycle
+Drain clog
+Overflow scare
+Salt buildup
+Biofilm
+Bennies added
+H2O2 debate
+Silica added
+PK boost
+KoolBloom week
+Transition stretch
+Week 3 frost
+Week 6 swell
+Late flower fade (nice)
+Sugar leaves
+Leaf strip
+LST tie-down
+Supercrop
+Scrog net
+Stake support
+Bud stacking
+Popcorn buds
+Larf cleanup
+Calyx swell
+Pistils orange
+Pistils white
+Trichomes clear
+Trichomes cloudy
+Trichomes amber
+Loupe check
+Scope pics
+Bananas spotted
+Nanner panic
+Herm confirmed
+Seed found
+Bud wash
+Dry trim
+Wet trim
+Jar burp
+Grove bags
+Hay smell
+Terp explosion
+Odor control
+Carbon filter swap
+IPM spray
+Neem debate
+Spinosad talk
+Predator mites
+Ladybugs released`;
 
 function normalizeLines(text: string): string[] {
   return text
