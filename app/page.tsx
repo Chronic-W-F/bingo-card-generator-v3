@@ -1,32 +1,54 @@
-// app/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 
-type BingoCard = { id: string; grid: string[][] };
+type BingoCard = {
+  id: string;
+  grid: string[][];
+};
 
-type CardsPack = {
+type BingoPack = {
   packId: string;
   createdAt: number;
   title?: string;
   sponsorName?: string;
   cards: BingoCard[];
+  weeklyPool: string[];
+  usedItems: string[];
 };
 
-type GeneratedPack = {
-  pdfBase64?: string; // optional because we do not persist it
-  csv: string;
-  createdAt: number;
-  requestKey: string;
-  usedItems?: string[];
-  cardsPack?: CardsPack;
-};
+const FORM_KEY = "grower-bingo:form:v3";
+const LAST_PACK_KEY = "grower-bingo:lastPackId:v1";
 
-const SHARED_POOL_KEY = "grower-bingo:pool:v1";
-const LAST_PACK_META_KEY = "grower-bingo:lastPackMeta:v1";
-const ACTIVE_PACK_ID_KEY = "grower-bingo:activePackId:v1";
+function normalizeLines(text: string): string[] {
+  return text
+    .split(/\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
-const DEFAULT_ITEMS = `Trellis net
+function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function base64ToBlob(base64: string, mime: string) {
+  const clean = base64.includes(",") ? base64.split(",")[1] : base64;
+  const bytes = Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: mime });
+}
+
+function packStorageKey(packId: string) {
+  return `grower-bingo:pack:${packId}`;
+}
+
+const DEFAULT_MASTER_POOL = `Trellis net
 Lollipop
 Defoliate
 Stretch week
@@ -50,566 +72,242 @@ Powdery mildew
 Fungus gnats
 Bud rot
 Nute lockout
-Late flower fade`;
+Late flower fade
+Salt buildup
+Root rot
+PPM creep
+PH pen died
+Reservoir slimy
+EC drift
+Hotspot in tent
+Cold snaps
+Light leak
+Timer failed
+Fans died
+Clogged dripper
+Pump failed
+Air stone clogged
+PH up overdose
+PH down overdose
+Nutrient burn
+Nitrogen toxicity
+Magnesium deficiency
+Calcium deficiency
+Iron deficiency
+Potassium deficiency
+Spider mites
+Thrips
+Aphids
+Whiteflies
+Neem smell
+Sticky traps full
+Trichome check
+Loupe lost
+Harvest window
+Dry room too dry
+Dry room too wet
+Hay smell panic
+Jar burp schedule
+Humidity pack debate
+Cure stalled`;
 
-function normalizeLines(text: string): string[] {
-  return text
-    .split(/\r?\n/g)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function safeFileName(s: string) {
-  const out = (s || "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_");
-  return out || "bingo-pack";
-}
-
-function downloadBase64Pdf(filename: string, base64: string) {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], { type: "application/pdf" });
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function downloadTextFile(
-  filename: string,
-  text: string,
-  mime = "text/plain;charset=utf-8"
-) {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function downloadJsonFile(filename: string, obj: unknown) {
-  const text = JSON.stringify(obj, null, 2);
-  downloadTextFile(filename, text, "application/json;charset=utf-8");
-}
-
-function loadLastPackMeta(): GeneratedPack | null {
-  try {
-    const raw = window.localStorage.getItem(LAST_PACK_META_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as GeneratedPack;
-  } catch {
-    return null;
-  }
-}
-
-function saveLastPackMeta(pack: GeneratedPack) {
-  try {
-    // Do not store pdfBase64 in localStorage (too large).
-    const toStore: GeneratedPack = {
-      csv: pack.csv || "",
-      createdAt: pack.createdAt,
-      requestKey: pack.requestKey,
-      usedItems: pack.usedItems,
-      cardsPack: pack.cardsPack,
-    };
-    window.localStorage.setItem(LAST_PACK_META_KEY, JSON.stringify(toStore));
-  } catch {
-    // ignore
-  }
-}
-
-export default function Page() {
+export default function HomePage() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
-  const [sponsorName, setSponsorName] = useState("Joe’s Grows");
-
-  // Locked: always use /banners/current.png
-  const [bannerImageUrl, setBannerImageUrl] = useState("/banners/current.png");
-
-  const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
   const [qtyInput, setQtyInput] = useState("25");
-  const [itemsText, setItemsText] = useState(DEFAULT_ITEMS);
+  const [itemsText, setItemsText] = useState(DEFAULT_MASTER_POOL);
 
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [pack, setPack] = useState<GeneratedPack | null>(null);
-  const [error, setError] = useState<string>("");
-  const [info, setInfo] = useState<string>("");
+  const masterPool = useMemo(() => normalizeLines(itemsText), [itemsText]);
 
-  const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
-  const poolCount = poolLines.length;
+  const [isBusy, setIsBusy] = useState(false);
+  const [status, setStatus] = useState<string>("");
 
-  // Restore last pack meta so buttons stay active when you come back from Caller
   useEffect(() => {
-    const last = loadLastPackMeta();
-    if (last?.requestKey) {
-      setPack(last);
-      if (last?.cardsPack?.title) setTitle(last.cardsPack.title);
-      if (typeof last?.cardsPack?.sponsorName === "string") {
-        setSponsorName(last.cardsPack.sponsorName);
-      }
-      if (last?.cardsPack?.packId) {
-        try {
-          window.localStorage.setItem(ACTIVE_PACK_ID_KEY, last.cardsPack.packId);
-        } catch {
-          // ignore
-        }
-      }
-      setInfo("Restored last generated pack (meta) from this device.");
+    const raw = window.localStorage.getItem(FORM_KEY);
+    if (!raw) return;
+    try {
+      const s = JSON.parse(raw) as {
+        title?: string;
+        qtyInput?: string;
+        itemsText?: string;
+      };
+      if (typeof s.title === "string") setTitle(s.title);
+      if (typeof s.qtyInput === "string") setQtyInput(s.qtyInput);
+      if (typeof s.itemsText === "string") setItemsText(s.itemsText);
+    } catch {
+      // ignore
     }
   }, []);
 
-  // Keep the shared pool synced for Caller reload
   useEffect(() => {
     try {
-      window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
-    } catch {
-      // ignore
-    }
-  }, [poolLines]);
-
-  function loadDefaults() {
-    setItemsText(DEFAULT_ITEMS);
-    setError("");
-    setInfo("");
-  }
-
-  function clampQty(raw: string) {
-    const n = Number.parseInt(raw, 10);
-    if (!Number.isFinite(n)) return 25;
-    return Math.max(1, Math.min(500, n));
-  }
-
-  async function generateAndDownloadPdf() {
-    setError("");
-    setInfo("");
-
-    const qty = clampQty(qtyInput);
-
-    if (poolLines.length < 24) {
-      setError(
-        `Pool too small. Need at least 24 items for a 5x5 card (FREE center). You have ${poolLines.length}.`
+      window.localStorage.setItem(
+        FORM_KEY,
+        JSON.stringify({ title, qtyInput, itemsText })
       );
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
     } catch {
       // ignore
     }
+  }, [title, qtyInput, itemsText]);
 
-    setIsGenerating(true);
+  async function generatePack() {
+    setStatus("");
+    setIsBusy(true);
     try {
+      const qty = Math.max(1, Number.parseInt(qtyInput, 10) || 1);
+
+      if (masterPool.length < 24) {
+        setStatus(`Need at least 24 unique items in the master pool. You have ${masterPool.length}.`);
+        setIsBusy(false);
+        return;
+      }
+
       const res = await fetch("/api/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           title,
-          sponsorName,
-          bannerImageUrl,
-          sponsorLogoUrl,
           qty,
-          items: poolLines,
+          items: masterPool,
+          gridSize: 5,
         }),
       });
 
-      const data = await res.json();
-
       if (!res.ok) {
-        setError(data?.error || "Generate failed.");
-        return;
+        const t = await res.text();
+        throw new Error(t || `Generate failed (${res.status})`);
       }
 
-      if (!data?.pdfBase64) {
-        setError("Generate succeeded but PDF was missing from the response.");
-        return;
-      }
+      const data = (await res.json()) as any;
 
-      const nextPack: GeneratedPack = {
-        pdfBase64: data.pdfBase64,
-        csv: data.csv || "",
-        createdAt: data.createdAt || Date.now(),
-        requestKey: data.requestKey || String(Date.now()),
-        usedItems: data.usedItems,
-        cardsPack: data.cardsPack,
+      const pack: BingoPack = {
+        packId: data.packId,
+        createdAt: data.createdAt ?? Date.now(),
+        title: data.title ?? title,
+        sponsorName: data.sponsorName,
+        cards: data.cards,
+        weeklyPool: data.weeklyPool ?? [],
+        usedItems: data.usedItems ?? [],
       };
 
-      setPack(nextPack);
-      saveLastPackMeta(nextPack);
-
-      // Save cardsPack to localStorage for Winners and digital cards
-      if (data?.cardsPack?.packId) {
-        const pid = data.cardsPack.packId;
-
-        try {
-          window.localStorage.setItem(ACTIVE_PACK_ID_KEY, pid);
-        } catch {
-          // ignore
-        }
-
-        try {
-          window.localStorage.setItem(
-            `grower-bingo:pack:${pid}`,
-            JSON.stringify(data.cardsPack)
-          );
-        } catch {
-          // ignore
-        }
-
-        // Important: clear any prior draw history for this packId
-        try {
-          window.localStorage.setItem(`grower-bingo:draws:${pid}`, "");
-        } catch {
-          // ignore
-        }
+      if (!pack.packId || !Array.isArray(pack.cards)) {
+        throw new Error("API response missing packId/cards.");
       }
 
-      // Option B: sync usedItems to caller pool so caller only draws items on cards
-      if (Array.isArray(data.usedItems) && data.usedItems.length) {
-        try {
-          window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
-        } catch {
-          // ignore
-        }
+      // CRITICAL: save pack where Caller expects it
+      window.localStorage.setItem(packStorageKey(pack.packId), JSON.stringify(pack));
+      window.localStorage.setItem(LAST_PACK_KEY, pack.packId);
+
+      // Optional fallback storage of weekly pool text
+      if (Array.isArray(pack.weeklyPool) && pack.weeklyPool.length) {
+        window.localStorage.setItem("grower-bingo:pool:v1", pack.weeklyPool.join("\n"));
       }
 
-      const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
-      setTimeout(() => {
-        try {
-          downloadBase64Pdf(filename, data.pdfBase64);
-          setInfo(
-            "PDF download triggered. If nothing happened, use the manual Download PDF button below."
-          );
-        } catch (e: any) {
-          setError(e?.message || "Could not trigger PDF download.");
-        }
-      }, 150);
+      // Download PDF
+      const pdfBase64 = data.pdfBase64 ?? data.pdf;
+      if (typeof pdfBase64 === "string" && pdfBase64.length > 0) {
+        const pdfBlob = base64ToBlob(pdfBase64, "application/pdf");
+        downloadBlob(`${pack.title || "bingo"}_${pack.packId}.pdf`, pdfBlob);
+      } else {
+        setStatus("Pack generated and saved, but API did not return pdfBase64.");
+      }
+
+      // Download CSV if included
+      if (typeof data.csv === "string" && data.csv.length > 0) {
+        const csvBlob = new Blob([data.csv], { type: "text/csv;charset=utf-8" });
+        downloadBlob(`${pack.title || "bingo"}_${pack.packId}.csv`, csvBlob);
+      }
+
+      setStatus(`Generated pack ${pack.packId}. Saved for Caller/Winners.`);
     } catch (e: any) {
-      setError(e?.message || "Generate failed.");
+      setStatus(e?.message || "Generate failed.");
     } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  function manualDownloadPdf() {
-    if (!pack?.pdfBase64) {
-      setError("PDF is not stored after refresh. Generate again if you need the PDF button active.");
-      return;
-    }
-    const filename = `${safeFileName(title)}-${pack.requestKey}.pdf`;
-    downloadBase64Pdf(filename, pack.pdfBase64);
-  }
-
-  function downloadCsv() {
-    if (!pack?.csv) return;
-    const filename = `${safeFileName(title)}-${pack.requestKey}.csv`;
-    downloadTextFile(filename, pack.csv, "text/csv;charset=utf-8");
-  }
-
-  function downloadCardsJson() {
-    const cardsPack = pack?.cardsPack;
-    if (!cardsPack?.packId) {
-      setError("No cardsPack found. Generate a pack first.");
-      return;
-    }
-    setError("");
-    const filename = `${safeFileName(title)}-${cardsPack.packId}.cards.json`;
-    downloadJsonFile(filename, cardsPack);
-    setInfo("cards.json downloaded.");
-  }
-
-  function openWinnersNewTab() {
-    const pid = pack?.cardsPack?.packId;
-    if (!pid) {
-      setError("No packId found. Generate a pack first.");
-      return;
-    }
-    window.open(`/winners/${encodeURIComponent(pid)}`, "_blank", "noopener,noreferrer");
-  }
-
-  function openCallerNewTab() {
-    const pid = pack?.cardsPack?.packId;
-    if (!pid) {
-      setError("Generate a pack first so Caller can bind to a packId.");
-      return;
-    }
-    try {
-      window.localStorage.setItem(ACTIVE_PACK_ID_KEY, pid);
-    } catch {
-      // ignore
-    }
-    window.open(`/caller?packId=${encodeURIComponent(pid)}`, "_blank", "noopener,noreferrer");
-  }
-
-  function clearActivePack() {
-    setPack(null);
-    setInfo("Cleared active pack. Generate new cards when ready.");
-    try {
-      window.localStorage.removeItem(LAST_PACK_META_KEY);
-      window.localStorage.removeItem(ACTIVE_PACK_ID_KEY);
-    } catch {
-      // ignore
+      setIsBusy(false);
     }
   }
 
   return (
-    <div
-      style={{
-        maxWidth: 760,
-        margin: "0 auto",
-        padding: 16,
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      }}
-    >
-      <h1 style={{ marginTop: 0, fontSize: 32 }}>Grower Bingo Generator</h1>
+    <div style={{ maxWidth: 820, margin: "0 auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+      <h1 style={{ marginTop: 0 }}>Grower Bingo Generator</h1>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: "grid", gap: 12 }}>
-          <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Pack title</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              style={{
-                width: "100%",
-                padding: 12,
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                fontSize: 16,
-              }}
-            />
-          </div>
+        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Title</label>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
+        />
 
-          <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Sponsor name</label>
-            <input
-              value={sponsorName}
-              onChange={(e) => setSponsorName(e.target.value)}
-              style={{
-                width: "100%",
-                padding: 12,
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                fontSize: 16,
-              }}
-            />
-          </div>
+        <div style={{ height: 12 }} />
 
-          <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
-              Banner image URL (top banner)
-            </label>
-            <input
-              value={bannerImageUrl}
-              onChange={(e) => setBannerImageUrl(e.target.value)}
-              placeholder="/banners/current.png"
-              style={{
-                width: "100%",
-                padding: 12,
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                fontSize: 16,
-              }}
-            />
-            <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep this value unchanged.
-            </div>
-          </div>
+        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Quantity (cards)</label>
+        <input
+          value={qtyInput}
+          onChange={(e) => setQtyInput(e.target.value)}
+          inputMode="numeric"
+          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
+        />
 
-          <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
-              Sponsor logo URL (FREE center square)
-            </label>
-            <input
-              value={sponsorLogoUrl}
-              onChange={(e) => setSponsorLogoUrl(e.target.value)}
-              placeholder="https://..."
-              style={{
-                width: "100%",
-                padding: 12,
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                fontSize: 16,
-              }}
-            />
-          </div>
+        <div style={{ height: 12 }} />
 
-          <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Quantity (1 to 500)</label>
-            <input
-              value={qtyInput}
-              onChange={(e) => setQtyInput(e.target.value)}
-              inputMode="numeric"
-              style={{
-                width: "100%",
-                maxWidth: 220,
-                padding: 12,
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                fontSize: 16,
-              }}
-            />
-          </div>
-
-          <div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ fontWeight: 700 }}>
-                Square pool items (one per line, need 24+). Current: {poolCount}
-              </div>
-
-              <button
-                onClick={loadDefaults}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: "1px solid #111827",
-                  background: "white",
-                  cursor: "pointer",
-                }}
-              >
-                Load defaults
-              </button>
-            </div>
-
-            <textarea
-              value={itemsText}
-              onChange={(e) => setItemsText(e.target.value)}
-              rows={12}
-              style={{
-                marginTop: 10,
-                width: "100%",
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                padding: 12,
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                fontSize: 14,
-              }}
-            />
-
-            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              Caller pool sync key: <b>{SHARED_POOL_KEY}</b>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
-            <button
-              onClick={generateAndDownloadPdf}
-              disabled={isGenerating}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: isGenerating ? "#9ca3af" : "#111827",
-                color: "white",
-                cursor: isGenerating ? "not-allowed" : "pointer",
-                minWidth: 240,
-              }}
-            >
-              {isGenerating ? "Generating..." : "Generate + Download PDF"}
-            </button>
-
-            <button
-              onClick={manualDownloadPdf}
-              disabled={!pack?.pdfBase64}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: !pack?.pdfBase64 ? "#9ca3af" : "white",
-                cursor: !pack?.pdfBase64 ? "not-allowed" : "pointer",
-                minWidth: 180,
-              }}
-            >
-              Download PDF
-            </button>
-
-            <button
-              onClick={downloadCsv}
-              disabled={!pack?.csv}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: !pack?.csv ? "#9ca3af" : "white",
-                cursor: !pack?.csv ? "not-allowed" : "pointer",
-                minWidth: 220,
-              }}
-            >
-              Download CSV (Roster)
-            </button>
-
-            <button
-              onClick={downloadCardsJson}
-              disabled={!pack?.cardsPack?.packId}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: !pack?.cardsPack?.packId ? "#9ca3af" : "white",
-                cursor: !pack?.cardsPack?.packId ? "not-allowed" : "pointer",
-                minWidth: 220,
-              }}
-            >
-              Download cards.json
-            </button>
-
-            <button
-              onClick={openWinnersNewTab}
-              disabled={!pack?.cardsPack?.packId}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: !pack?.cardsPack?.packId ? "#9ca3af" : "white",
-                cursor: !pack?.cardsPack?.packId ? "not-allowed" : "pointer",
-                minWidth: 220,
-              }}
-            >
-              Open Winners (new tab)
-            </button>
-
-            <button
-              onClick={openCallerNewTab}
-              disabled={!pack?.cardsPack?.packId}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: !pack?.cardsPack?.packId ? "#9ca3af" : "white",
-                cursor: !pack?.cardsPack?.packId ? "not-allowed" : "pointer",
-                minWidth: 220,
-              }}
-            >
-              Open Caller (new tab)
-            </button>
-
-            <button
-              onClick={clearActivePack}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "1px solid #111827",
-                background: "white",
-                cursor: "pointer",
-                minWidth: 200,
-              }}
-            >
-              Clear active pack
-            </button>
-          </div>
-
-          {error ? <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div> : null}
-          {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>
+          Master pool (one per line). Current unique lines: {masterPool.length}
         </div>
+        <textarea
+          value={itemsText}
+          onChange={(e) => setItemsText(e.target.value)}
+          rows={14}
+          style={{
+            width: "100%",
+            borderRadius: 10,
+            border: "1px solid #d1d5db",
+            padding: 12,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontSize: 14,
+          }}
+        />
+
+        <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button
+            onClick={generatePack}
+            disabled={isBusy}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: isBusy ? "#9ca3af" : "#111827",
+              color: "white",
+              cursor: isBusy ? "not-allowed" : "pointer",
+            }}
+          >
+            Generate + Download PDF
+          </button>
+
+          <a
+            href="/caller"
+            style={{
+              display: "inline-block",
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              color: "#111827",
+              textDecoration: "none",
+            }}
+          >
+            Go to Caller
+          </a>
+        </div>
+
+        {status ? (
+          <div style={{ marginTop: 12, fontSize: 13, color: "#374151" }}>
+            {status}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={{ fontSize: 13, color: "#6b7280" }}>
+        Generator saves the latest pack to localStorage so Caller can auto-load the weekly pool without typing.
       </div>
     </div>
   );
-}
+        }
