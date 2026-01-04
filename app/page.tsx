@@ -12,7 +12,7 @@ type CardsPack = {
 };
 
 type GeneratedPack = {
-  pdfBase64: string;
+  pdfBase64?: string; // optional because we do not persist it
   csv: string;
   createdAt: number;
   requestKey: string;
@@ -21,6 +21,7 @@ type GeneratedPack = {
 };
 
 const SHARED_POOL_KEY = "grower-bingo:pool:v1";
+const LAST_PACK_META_KEY = "grower-bingo:lastPackMeta:v1";
 
 const DEFAULT_ITEMS = `Trellis net
 Lollipop
@@ -93,11 +94,37 @@ function downloadJsonFile(filename: string, obj: unknown) {
   downloadTextFile(filename, text, "application/json;charset=utf-8");
 }
 
+function loadLastPackMeta(): GeneratedPack | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_PACK_META_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as GeneratedPack;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastPackMeta(pack: GeneratedPack) {
+  try {
+    // Do not store pdfBase64 in localStorage (too large).
+    const toStore: GeneratedPack = {
+      csv: pack.csv || "",
+      createdAt: pack.createdAt,
+      requestKey: pack.requestKey,
+      usedItems: pack.usedItems,
+      cardsPack: pack.cardsPack,
+    };
+    window.localStorage.setItem(LAST_PACK_META_KEY, JSON.stringify(toStore));
+  } catch {
+    // ignore
+  }
+}
+
 export default function Page() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
 
-  // ✅ LOCKED: always use /banners/current.png
+  // Locked: always use /banners/current.png
   const [bannerImageUrl, setBannerImageUrl] = useState("/banners/current.png");
 
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
@@ -111,6 +138,17 @@ export default function Page() {
 
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
+
+  // Restore last pack meta so buttons stay active when you come back from Caller
+  useEffect(() => {
+    const last = loadLastPackMeta();
+    if (last?.requestKey) {
+      setPack(last);
+      if (last?.cardsPack?.title) setTitle(last.cardsPack.title);
+      if (typeof last?.cardsPack?.sponsorName === "string") setSponsorName(last.cardsPack.sponsorName);
+      setInfo("Restored last generated pack (meta) from this device.");
+    }
+  }, []);
 
   // Keep the shared pool synced for Caller reload
   useEffect(() => {
@@ -146,7 +184,6 @@ export default function Page() {
       return;
     }
 
-    // Ensure caller pool is synced before generating
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
     } catch {
@@ -161,10 +198,10 @@ export default function Page() {
         body: JSON.stringify({
           title,
           sponsorName,
-          bannerImageUrl, // ✅ always /banners/current.png unless you change it
+          bannerImageUrl,
           sponsorLogoUrl,
           qty,
-          items: poolLines, // send array
+          items: poolLines,
         }),
       });
 
@@ -190,8 +227,9 @@ export default function Page() {
       };
 
       setPack(nextPack);
+      saveLastPackMeta(nextPack);
 
-      // ✅ NEW: Save the cardsPack as source-of-truth for digital cards + winners
+      // Save cardsPack as source-of-truth for winners and digital cards
       if (data?.cardsPack?.packId) {
         try {
           window.localStorage.setItem(
@@ -203,7 +241,7 @@ export default function Page() {
         }
       }
 
-      // If API returns usedItems, sync those to Caller pool (Option B)
+      // Option B: sync usedItems to caller pool so caller only draws items on cards
       if (Array.isArray(data.usedItems) && data.usedItems.length) {
         try {
           window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
@@ -214,7 +252,6 @@ export default function Page() {
 
       // Auto download PDF
       const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
-
       setTimeout(() => {
         try {
           downloadBase64Pdf(filename, data.pdfBase64);
@@ -231,7 +268,10 @@ export default function Page() {
   }
 
   function manualDownloadPdf() {
-    if (!pack?.pdfBase64) return;
+    if (!pack?.pdfBase64) {
+      setError("PDF is not stored after refresh. Generate again if you need the PDF button active.");
+      return;
+    }
     const filename = `${safeFileName(title)}-${pack.requestKey}.pdf`;
     downloadBase64Pdf(filename, pack.pdfBase64);
   }
@@ -258,6 +298,16 @@ export default function Page() {
     const packId = pack?.cardsPack?.packId || pack?.requestKey;
     if (!packId) return;
     window.location.href = `/winners/${encodeURIComponent(packId)}`;
+  }
+
+  function clearActivePack() {
+    setPack(null);
+    setInfo("Cleared active pack. Generate new cards when ready.");
+    try {
+      window.localStorage.removeItem(LAST_PACK_META_KEY);
+    } catch {
+      // ignore
+    }
   }
 
   return (
@@ -362,7 +412,7 @@ export default function Page() {
           <div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ fontWeight: 700 }}>
-                Square pool items (one per line — need 24+). Current: {poolCount}
+                Square pool items (one per line, need 24+). Current: {poolCount}
               </div>
 
               <button
@@ -418,13 +468,13 @@ export default function Page() {
 
             <button
               onClick={manualDownloadPdf}
-              disabled={!pack}
+              disabled={!pack?.pdfBase64}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack ? "#9ca3af" : "white",
-                cursor: !pack ? "not-allowed" : "pointer",
+                background: !pack?.pdfBase64 ? "#9ca3af" : "white",
+                cursor: !pack?.pdfBase64 ? "not-allowed" : "pointer",
                 minWidth: 180,
               }}
             >
@@ -433,13 +483,13 @@ export default function Page() {
 
             <button
               onClick={downloadCsv}
-              disabled={!pack}
+              disabled={!pack?.csv}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack ? "#9ca3af" : "white",
-                cursor: !pack ? "not-allowed" : "pointer",
+                background: !pack?.csv ? "#9ca3af" : "white",
+                cursor: !pack?.csv ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
@@ -490,6 +540,20 @@ export default function Page() {
             >
               Open Caller
             </a>
+
+            <button
+              onClick={clearActivePack}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #111827",
+                background: "white",
+                cursor: "pointer",
+                minWidth: 200,
+              }}
+            >
+              Clear active pack
+            </button>
           </div>
 
           {error ? <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div> : null}
