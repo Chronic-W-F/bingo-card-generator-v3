@@ -80,31 +80,27 @@ export async function POST(req: Request) {
     const createdAt = Date.now();
 
     // --- Banner restore ---
-    // react-pdf is happiest with:
-    // - data URI (preferred)
-    // - absolute https URL (sometimes ok)
-    //
-    // Your weekly workflow is "replace public/banners/current.png" so default to that.
+    // Default workflow: replace public/banners/current.png weekly
     const bannerUrl = (body.bannerImageUrl ?? "/banners/current.png").toString();
 
-    let sponsorImage: string | undefined = undefined;
+    // We'll convert /public paths to a data URI for react-pdf reliability
+    let bannerDataOrUrl: string | undefined = undefined;
 
     if (bannerUrl.startsWith("/")) {
-      // Read from /public and convert to data URI
-      sponsorImage = (await readPublicAsDataUri(bannerUrl)) ?? undefined;
+      bannerDataOrUrl = (await readPublicAsDataUri(bannerUrl)) ?? undefined;
     } else if (bannerUrl.startsWith("https://") || bannerUrl.startsWith("http://")) {
-      // Allow absolute URLs too
-      sponsorImage = bannerUrl;
+      bannerDataOrUrl = bannerUrl;
     }
 
     // IMPORTANT:
-    // - app/page.tsx expects pdfBase64 to be RAW base64 (no "data:application/pdf;base64,")
-    //   because downloadBase64Pdf() calls atob(base64).
+    // - app/page.tsx expects pdfBase64 to be RAW base64 (no data: prefix)
     const pdfBuffer = await renderToBuffer(
       BingoPackPdf({
         title,
         sponsorName: body.sponsorName,
-        sponsorImage, // ✅ banner restored here
+        // ✅ FIX: send the resolved banner into BOTH props so whichever PDF version you have renders it
+        bannerImageUrl: bannerDataOrUrl,
+        sponsorImage: bannerDataOrUrl,
         cards: pack.cards,
       }) as any
     );
@@ -116,37 +112,30 @@ export async function POST(req: Request) {
     for (const c of pack.cards) csvLines.push(c.id);
     const csv = csvLines.join("\n");
 
-    // This is what the Generator + Caller/Winners need to persist
-    // Keep shape stable; you can add weeklyPool/usedItems later if desired.
     const cardsPack = {
       packId,
       createdAt,
       title,
       sponsorName: body.sponsorName,
       cards: pack.cards,
-      // Helpful to include these now; won’t break your existing generator code
       weeklyPool: pack.weeklyPool,
       usedItems: pack.usedItems,
     };
 
-    // requestKey: use packId so filenames and winners urls stay consistent
     const requestKey = packId;
 
     return NextResponse.json({
       requestKey,
       createdAt,
 
-      // keep these too (handy for debugging)
       packId,
       title,
 
-      // what Generator expects
       pdfBase64,
       csv,
       usedItems: pack.usedItems,
       cardsPack,
 
-      // what older parts might still read
       weeklyPool: pack.weeklyPool,
       cards: pack.cards,
     });
