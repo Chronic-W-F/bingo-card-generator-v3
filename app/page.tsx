@@ -3,12 +3,17 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
+type BingoCard = {
+  id: string;
+  grid: string[][];
+};
+
 type CardsPack = {
   packId: string;
   createdAt: number;
   title?: string;
   sponsorName?: string;
-  cards: { id: string; grid: string[][] }[];
+  cards: BingoCard[];
 };
 
 type GeneratedPack = {
@@ -124,7 +129,7 @@ export default function Page() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
 
-  // Locked: always use /banners/current.png
+  // ✅ Locked: always use /banners/current.png (swap the file weekly in public/)
   const [bannerImageUrl, setBannerImageUrl] = useState("/banners/current.png");
 
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
@@ -139,7 +144,7 @@ export default function Page() {
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
 
-  // Restore last pack meta so buttons stay active when you come back from Caller
+  // Restore last pack meta so buttons stay active after returning from Caller/Winners
   useEffect(() => {
     const last = loadLastPackMeta();
     if (last?.requestKey) {
@@ -184,6 +189,7 @@ export default function Page() {
       return;
     }
 
+    // Ensure caller pool is synced before generating
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
     } catch {
@@ -229,7 +235,7 @@ export default function Page() {
       setPack(nextPack);
       saveLastPackMeta(nextPack);
 
-      // Save cardsPack as source-of-truth for winners and digital cards
+      // Save cardsPack locally as source-of-truth for Winners + digital cards (Option 1 localStorage)
       if (data?.cardsPack?.packId) {
         try {
           window.localStorage.setItem(
@@ -294,21 +300,36 @@ export default function Page() {
     setInfo("cards.json downloaded.");
   }
 
-  function openWinners() {
-    const packId = pack?.cardsPack?.packId || pack?.requestKey;
-    if (!packId) return;
-    window.location.href = `/winners/${encodeURIComponent(packId)}`;
+  function openWinnersNewTab() {
+    const pid = pack?.cardsPack?.packId;
+    if (!pid) {
+      setError("No packId found. Generate a pack first.");
+      return;
+    }
+    window.open(`/winners/${encodeURIComponent(pid)}`, "_blank", "noopener,noreferrer");
+  }
+
+  function openCallerNewTab() {
+    const pid = pack?.cardsPack?.packId;
+    const href = pid ? `/caller?packId=${encodeURIComponent(pid)}` : "/caller";
+    window.open(href, "_blank", "noopener,noreferrer");
   }
 
   function clearActivePack() {
     setPack(null);
     setInfo("Cleared active pack. Generate new cards when ready.");
+    setError("");
     try {
       window.localStorage.removeItem(LAST_PACK_META_KEY);
     } catch {
       // ignore
     }
   }
+
+  const hasPackMeta = !!pack?.requestKey;
+  const hasPdf = !!pack?.pdfBase64;
+  const hasCsv = !!pack?.csv;
+  const hasCardsPack = !!pack?.cardsPack?.packId;
 
   return (
     <div
@@ -468,13 +489,13 @@ export default function Page() {
 
             <button
               onClick={manualDownloadPdf}
-              disabled={!pack?.pdfBase64}
+              disabled={!hasPdf}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack?.pdfBase64 ? "#9ca3af" : "white",
-                cursor: !pack?.pdfBase64 ? "not-allowed" : "pointer",
+                background: !hasPdf ? "#9ca3af" : "white",
+                cursor: !hasPdf ? "not-allowed" : "pointer",
                 minWidth: 180,
               }}
             >
@@ -483,13 +504,13 @@ export default function Page() {
 
             <button
               onClick={downloadCsv}
-              disabled={!pack?.csv}
+              disabled={!hasCsv}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack?.csv ? "#9ca3af" : "white",
-                cursor: !pack?.csv ? "not-allowed" : "pointer",
+                background: !hasCsv ? "#9ca3af" : "white",
+                cursor: !hasCsv ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
@@ -498,13 +519,13 @@ export default function Page() {
 
             <button
               onClick={downloadCardsJson}
-              disabled={!pack?.cardsPack?.packId}
+              disabled={!hasCardsPack}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack?.cardsPack?.packId ? "#9ca3af" : "white",
-                cursor: !pack?.cardsPack?.packId ? "not-allowed" : "pointer",
+                background: !hasCardsPack ? "#9ca3af" : "white",
+                cursor: !hasCardsPack ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
@@ -512,45 +533,44 @@ export default function Page() {
             </button>
 
             <button
-              onClick={openWinners}
-              disabled={!pack?.cardsPack?.packId && !pack?.requestKey}
+              onClick={openWinnersNewTab}
+              disabled={!hasCardsPack}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack?.cardsPack?.packId && !pack?.requestKey ? "#9ca3af" : "white",
-                cursor: !pack?.cardsPack?.packId && !pack?.requestKey ? "not-allowed" : "pointer",
+                background: !hasCardsPack ? "#9ca3af" : "white",
+                cursor: !hasCardsPack ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
-              Open Winners
+              Open Winners (new tab)
             </button>
 
-            <a
-              href="/caller"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              onClick={openCallerNewTab}
+              disabled={isGenerating}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
                 background: "white",
-                textDecoration: "none",
-                color: "#111827",
-                display: "inline-block",
+                cursor: isGenerating ? "not-allowed" : "pointer",
+                minWidth: 220,
               }}
             >
               Open Caller (new tab)
-            </a>
+            </button>
 
             <button
               onClick={clearActivePack}
+              disabled={!hasPackMeta}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: "white",
-                cursor: "pointer",
+                background: !hasPackMeta ? "#9ca3af" : "white",
+                cursor: !hasPackMeta ? "not-allowed" : "pointer",
                 minWidth: 200,
               }}
             >
@@ -562,6 +582,11 @@ export default function Page() {
           {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
+
+      <div style={{ fontSize: 12, color: "#6b7280" }}>
+        Tip: Winners + Caller are device-specific until we add server storage. Generate and run the calls on the same phone
+        that you’ll use to check Winners.
+      </div>
     </div>
   );
-}
+        }
