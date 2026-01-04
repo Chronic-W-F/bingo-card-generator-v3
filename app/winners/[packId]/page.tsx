@@ -1,3 +1,4 @@
+// app/winners/[packId]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -28,6 +29,21 @@ type DrawDay = {
   calls: string[];
 };
 
+type CallerState = {
+  packId: string;
+  poolText: string;
+  deckSize: number;
+  drawSize: number;
+  deckSizeInput: string;
+  drawSizeInput: string;
+  round: number;
+  deck: string[];
+  called: string[];
+  draws: string[][];
+};
+
+const CALLER_STATE_KEY = "grower-bingo:caller:v2";
+
 function packStorageKey(packId: string) {
   return `grower-bingo:pack:${packId}`;
 }
@@ -50,12 +66,23 @@ function loadJson<T>(key: string, fallback: T): T {
   }
 }
 
+function loadText(key: string, fallback = ""): string {
+  try {
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveText(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
 function parseDrawText(drawText: string): DrawDay[] {
-  // Accepts headers like:
-  // Day 1:
-  // 1:
-  // DAY 2
-  // Day 3
   const lines = drawText.split("\n").map((l) => l.trimEnd());
 
   const days: DrawDay[] = [];
@@ -90,6 +117,17 @@ function parseDrawText(drawText: string): DrawDay[] {
   return days;
 }
 
+function buildDrawTextFromCallerDraws(draws: string[][]): string {
+  if (!Array.isArray(draws) || !draws.length) return "";
+  const lines: string[] = [];
+  for (let i = 0; i < draws.length; i++) {
+    lines.push(`Day ${i + 1}:`);
+    for (const item of draws[i] || []) lines.push(item);
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
+
 export default function WinnersPage({ params }: { params: { packId: string } }) {
   const { packId } = params;
 
@@ -98,25 +136,51 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
   const [claims, setClaims] = useState<Record<string, ClaimInfo>>({});
   const [claimName, setClaimName] = useState<string>("");
 
+  const [status, setStatus] = useState<string>("");
+
+  // Load pack + draws + claims on mount
   useEffect(() => {
     const p = loadJson<CardsPack | null>(packStorageKey(packId), null);
     setPack(p);
 
-    const draws = loadJson<string>(drawsStorageKey(packId), "");
-    setDrawText(draws);
-
+    const storedDrawText = loadText(drawsStorageKey(packId), "");
     const c = loadJson<Record<string, ClaimInfo>>(claimsStorageKey(packId), {});
     setClaims(c);
+
+    // Fix C: auto-fill drawText if empty by pulling from Caller state
+    if (storedDrawText.trim()) {
+      setDrawText(storedDrawText);
+      setStatus("Loaded calls from saved draw history for this pack.");
+      return;
+    }
+
+    const callerState = loadJson<CallerState | null>(CALLER_STATE_KEY, null);
+    const samePack = callerState && (callerState.packId || "").trim() === packId;
+
+    if (samePack) {
+      const rebuilt = buildDrawTextFromCallerDraws(callerState.draws || []);
+      if (rebuilt.trim()) {
+        setDrawText(rebuilt);
+        saveText(drawsStorageKey(packId), rebuilt);
+        setStatus("Recovered calls from Caller history and saved them for this pack.");
+        return;
+      }
+      setStatus("Caller history found for this pack, but it has no draws yet.");
+      return;
+    }
+
+    setDrawText("");
+    setStatus(
+      "No calls found for this pack yet. Run draws in Caller, or paste the call history here."
+    );
   }, [packId]);
 
+  // Persist drawText edits
   useEffect(() => {
-    try {
-      window.localStorage.setItem(drawsStorageKey(packId), drawText);
-    } catch {
-      // ignore
-    }
+    saveText(drawsStorageKey(packId), drawText);
   }, [packId, drawText]);
 
+  // Persist claims
   useEffect(() => {
     try {
       window.localStorage.setItem(claimsStorageKey(packId), JSON.stringify(claims));
@@ -157,6 +221,15 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
     });
   }
 
+  const completed = expected
+    .filter((r) => r.completionDay != null)
+    .sort((a, b) => (a.completionDay! - b.completionDay!));
+
+  const firstCompletionDay = completed.length ? completed[0].completionDay : null;
+  const firstCompleters = firstCompletionDay
+    ? completed.filter((r) => r.completionDay === firstCompletionDay).map((r) => r.cardId)
+    : [];
+
   if (!pack) {
     return (
       <div
@@ -174,8 +247,7 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
             packId: <b>{packId}</b>
           </div>
           <div style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
-            This is Option 1 (localStorage). Generate the pack on this device so it saves locally, or later
-            we can add server storage.
+            Generate the pack on this device so it saves locally.
           </div>
         </div>
       </div>
@@ -205,6 +277,10 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
         <div>
           cards: <b>{pack.cards.length}</b>
         </div>
+      </div>
+
+      <div style={{ marginBottom: 12, fontSize: 13, color: "#374151" }}>
+        <b>Status:</b> {status}
       </div>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
@@ -239,6 +315,25 @@ Cal-Mag`}
         />
       </div>
 
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Completion summary</div>
+
+        {firstCompletionDay == null ? (
+          <div style={{ color: "#6b7280", fontSize: 13 }}>
+            No cards complete yet. If you already ran draws in Caller, your calls are not saved for this pack. Scroll up
+            and check the Status line.
+          </div>
+        ) : (
+          <div style={{ fontSize: 13 }}>
+            First completion day: <b>Day {firstCompletionDay}</b>
+            <div style={{ marginTop: 6 }}>
+              Card(s) that should have completed first:{" "}
+              <b>{firstCompleters.join(", ")}</b>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
         <div
           style={{
@@ -250,7 +345,7 @@ Cal-Mag`}
             marginBottom: 12,
           }}
         >
-          <div style={{ fontWeight: 800 }}>Should-have-won timeline + claim tracking</div>
+          <div style={{ fontWeight: 800 }}>Should-have-won timeline and claim tracking</div>
 
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <div style={{ fontSize: 13, color: "#6b7280" }}>Claim name (optional):</div>
@@ -301,11 +396,7 @@ Cal-Mag`}
                     </td>
                     <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{completionText}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
-                      <input
-                        type="checkbox"
-                        checked={!!info.claimed}
-                        onChange={() => toggleClaim(row.cardId)}
-                      />
+                      <input type="checkbox" checked={!!info.claimed} onChange={() => toggleClaim(row.cardId)} />
                     </td>
                     <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{claimText}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
