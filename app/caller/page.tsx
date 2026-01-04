@@ -1,12 +1,15 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 
 const SHARED_POOL_KEY = "grower-bingo:pool:v1";
 const CALLER_STATE_KEY = "grower-bingo:caller:v1";
 
-// ✅ Change this if your generator lives somewhere else
+// Handshake keys (set by Generator after a new pack is generated)
+const ACTIVE_PACK_ID_KEY = "grower-bingo:activePackId:v1";
+const CALLER_RESET_FLAG_KEY = "grower-bingo:callerResetFlag:v1";
+
+// Change this if your generator lives somewhere else
 const GENERATOR_URL = "https://grower-bingo-generator.vercel.app/";
 
 type CallerState = {
@@ -18,7 +21,8 @@ type CallerState = {
   round: number;
   deck: string[];
   called: string[];
-  draws: string[][]; // history of each draw (round)
+  draws: string[][];
+  activePackId?: string; // track which pack this caller run belongs to
 };
 
 function normalizeLines(text: string): string[] {
@@ -52,11 +56,9 @@ export default function CallerPage() {
   const poolLines = useMemo(() => normalizeLines(poolText), [poolText]);
   const poolCount = poolLines.length;
 
-  // numeric state (used when actually running logic)
   const [deckSize, setDeckSize] = useState<number>(50);
   const [drawSize, setDrawSize] = useState<number>(10);
 
-  // input strings (so mobile typing works and you can delete)
   const [deckSizeInput, setDeckSizeInput] = useState<string>("50");
   const [drawSizeInput, setDrawSizeInput] = useState<string>("10");
 
@@ -65,59 +67,94 @@ export default function CallerPage() {
   const [called, setCalled] = useState<string[]>([]);
   const [draws, setDraws] = useState<string[][]>([]);
 
+  const [activePackId, setActivePackId] = useState<string>("");
+
+  // ---------- helpers ----------
+  function hardResetStateToPoolText(nextPoolText: string, nextPackId: string) {
+    setPoolText(nextPoolText);
+
+    setDeckSize(50);
+    setDrawSize(10);
+    setDeckSizeInput("50");
+    setDrawSizeInput("10");
+
+    setDeck([]);
+    setCalled([]);
+    setDraws([]);
+    setRound(0);
+
+    setActivePackId(nextPackId);
+
+    try {
+      window.localStorage.removeItem(CALLER_STATE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
+  function reloadSharedPool() {
+    const shared = window.localStorage.getItem(SHARED_POOL_KEY) ?? "";
+    setPoolText(shared);
+  }
+
   // ---------- Load on mount ----------
   useEffect(() => {
-    const shared =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem(SHARED_POOL_KEY)
-        : null;
-    const sharedText = shared ?? "";
+    const shared = window.localStorage.getItem(SHARED_POOL_KEY) ?? "";
+    const flag = window.localStorage.getItem(CALLER_RESET_FLAG_KEY) ?? "";
+    const packId = window.localStorage.getItem(ACTIVE_PACK_ID_KEY) ?? "";
 
-    const rawState =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem(CALLER_STATE_KEY)
-        : null;
+    // If Generator says "new pack generated", wipe old caller game state
+    if (flag === "1" && packId) {
+      try {
+        window.localStorage.removeItem(CALLER_RESET_FLAG_KEY);
+      } catch {
+        // ignore
+      }
+
+      hardResetStateToPoolText(shared, packId);
+      return;
+    }
+
+    const rawState = window.localStorage.getItem(CALLER_STATE_KEY);
 
     if (rawState) {
       try {
         const s = JSON.parse(rawState) as CallerState;
 
-        const restoredPoolText = (s.poolText ?? "").trim() || sharedText;
+        const restoredPoolText = (s.poolText ?? "").trim() || shared;
         setPoolText(restoredPoolText);
 
-        // Restore input strings exactly (this fixes the “stuck 1” typing behavior)
-        const restoredDeckInput =
-          (s.deckSizeInput ?? "").trim() || String(s.deckSize ?? 50);
-        const restoredDrawInput =
-          (s.drawSizeInput ?? "").trim() || String(s.drawSize ?? 10);
+        const restoredDeckInput = (s.deckSizeInput ?? "").trim() || String(s.deckSize ?? 50);
+        const restoredDrawInput = (s.drawSizeInput ?? "").trim() || String(s.drawSize ?? 10);
         setDeckSizeInput(restoredDeckInput);
         setDrawSizeInput(restoredDrawInput);
 
-        // Restore numeric values (clamped later on blur/start)
         const restoredDeck = Number.isFinite(s.deckSize) ? s.deckSize : 50;
         const restoredDraw = Number.isFinite(s.drawSize) ? s.drawSize : 10;
         setDeckSize(restoredDeck);
         setDrawSize(restoredDraw);
 
-        // Restore game state
         setRound(Number.isFinite(s.round) ? s.round : 0);
         setDeck(Array.isArray(s.deck) ? s.deck : []);
         setCalled(Array.isArray(s.called) ? s.called : []);
         setDraws(Array.isArray(s.draws) ? s.draws : []);
+
+        const restoredPackId = typeof s.activePackId === "string" ? s.activePackId : "";
+        setActivePackId(restoredPackId);
+
         return;
       } catch {
         // fall through
       }
     }
 
-    // no saved state
-    setPoolText(sharedText);
-
-    // if pool is smaller than 50, we’ll clamp when user blurs or starts game
+    // No saved state
+    setPoolText(shared);
     setDeckSize(50);
     setDrawSize(10);
     setDeckSizeInput("50");
     setDrawSizeInput("10");
+    setActivePackId(packId || "");
   }, []);
 
   // ---------- Persist whenever anything changes ----------
@@ -132,6 +169,7 @@ export default function CallerPage() {
       deck,
       called,
       draws,
+      activePackId,
     };
     try {
       window.localStorage.setItem(CALLER_STATE_KEY, JSON.stringify(state));
@@ -148,12 +186,8 @@ export default function CallerPage() {
     deck,
     called,
     draws,
+    activePackId,
   ]);
-
-  function reloadSharedPool() {
-    const shared = window.localStorage.getItem(SHARED_POOL_KEY) ?? "";
-    setPoolText(shared);
-  }
 
   // Clamp ONLY on blur or Start Game (never while typing)
   function clampDeckOnBlur() {
@@ -163,7 +197,6 @@ export default function CallerPage() {
     setDeckSize(next);
     setDeckSizeInput(String(next));
 
-    // also clamp draw if needed
     const wantedDraw = safeParseInt(drawSizeInput, drawSize);
     const nextDraw = clamp(wantedDraw, 1, next);
     setDrawSize(nextDraw);
@@ -195,6 +228,10 @@ export default function CallerPage() {
     setCalled([]);
     setDraws([]);
     setRound(0);
+
+    // If generator has a current active pack id, stamp it into this game
+    const pid = window.localStorage.getItem(ACTIVE_PACK_ID_KEY) ?? "";
+    if (pid && pid !== activePackId) setActivePackId(pid);
   }
 
   function resetGame() {
@@ -204,13 +241,23 @@ export default function CallerPage() {
     setRound(0);
   }
 
+  function clearCallerSavedState() {
+    try {
+      window.localStorage.removeItem(CALLER_STATE_KEY);
+    } catch {
+      // ignore
+    }
+    const shared = window.localStorage.getItem(SHARED_POOL_KEY) ?? "";
+    const pid = window.localStorage.getItem(ACTIVE_PACK_ID_KEY) ?? "";
+    hardResetStateToPoolText(shared, pid);
+  }
+
   function nextDraw() {
     if (!deck.length) return;
 
     const remaining = deck.filter((x) => !called.includes(x));
     if (!remaining.length) return;
 
-    // IMPORTANT: use drawSizeInput to avoid “draws 1 even though UI says 15”
     const wanted = safeParseInt(drawSizeInput, drawSize);
     const n = clamp(wanted, 1, remaining.length);
 
@@ -249,8 +296,11 @@ export default function CallerPage() {
       >
         <h1 style={{ margin: 0, fontSize: 24 }}>Grower Bingo — Caller</h1>
 
+        <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+          Active pack: <b>{activePackId || "none"}</b>
+        </div>
+
         <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {/* ✅ Absolute URL so it ALWAYS goes to the real Generator */}
           <a
             href={GENERATOR_URL}
             style={{
@@ -266,7 +316,18 @@ export default function CallerPage() {
             ← Back to Generator
           </a>
 
-          {/* ❌ Removed the duplicate reload button up here */}
+          <button
+            onClick={clearCallerSavedState}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              cursor: "pointer",
+            }}
+          >
+            Clear saved caller state
+          </button>
         </div>
       </div>
 
@@ -285,14 +346,12 @@ export default function CallerPage() {
             borderRadius: 10,
             border: "1px solid #d1d5db",
             padding: 12,
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
             fontSize: 14,
           }}
           placeholder="One item per line"
         />
 
-        {/* ✅ Keep exactly ONE reload button (this one) */}
         <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
           <button
             onClick={reloadSharedPool}
@@ -308,9 +367,8 @@ export default function CallerPage() {
         </div>
 
         <div style={{ marginTop: 12, fontSize: 13, color: "#374151" }}>
-          Note: This page reads the shared pool from localStorage key{" "}
-          <b>{SHARED_POOL_KEY}</b>. When you generate a pack, the Generator syncs
-          the caller pool automatically.
+          Note: This page reads the shared pool from localStorage key <b>{SHARED_POOL_KEY}</b>.
+          When you generate a pack, the Generator syncs the caller pool automatically.
         </div>
       </div>
 
@@ -393,8 +451,7 @@ export default function CallerPage() {
               borderRadius: 10,
               border: "1px solid #111827",
               background: !hasGame || remainingCount === 0 ? "#9ca3af" : "white",
-              cursor:
-                !hasGame || remainingCount === 0 ? "not-allowed" : "pointer",
+              cursor: !hasGame || remainingCount === 0 ? "not-allowed" : "pointer",
             }}
           >
             Next draw
@@ -430,9 +487,7 @@ export default function CallerPage() {
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
             {draws.map((batch, idx) => (
               <div key={idx} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>
-                  Round {idx + 1}
-                </div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Round {idx + 1}</div>
                 <div style={{ lineHeight: 1.6 }}>
                   {batch.map((item) => (
                     <div key={item}>{item}</div>
