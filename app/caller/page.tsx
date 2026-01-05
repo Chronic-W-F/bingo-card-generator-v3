@@ -1,27 +1,15 @@
+// app/caller/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 
-const POOL_KEY = "grower-bingo:pool:v1"; // Option B pool sync (generator -> caller)
+const POOL_KEY = "grower-bingo:pool:v1";
 const CALLER_STATE_KEY = "grower-bingo:callerState:v1";
-const LAST_PACK_ID_KEY = "grower-bingo:lastPackId:v1";
+const LAST_PACK_KEY = "grower-bingo:lastPackId:v1";
 
-type CallerState = {
-  version: 1;
-  createdAt: number;
-  updatedAt: number;
-
-  // Pool data
-  poolLines: string[]; // current pool (unique)
-  remaining: string[]; // remaining items to draw (shuffled)
-  called: string[]; // called items in order
-
-  // Settings
-  drawCount: number; // how many to draw per click
-
-  // UX
-  lastSavedAt?: number; // when user clicked "Save pool and reshuffle"
-};
+function packCallerKey(packId: string) {
+  return `grower-bingo:callerState:${packId}`;
+}
 
 function normalizeLines(text: string): string[] {
   return text
@@ -30,15 +18,13 @@ function normalizeLines(text: string): string[] {
     .filter(Boolean);
 }
 
-function uniq(lines: string[]) {
+function uniqCaseSensitive(items: string[]) {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const l of lines) {
-    const k = l.trim();
-    if (!k) continue;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(k);
+  for (const it of items) {
+    if (seen.has(it)) continue;
+    seen.add(it);
+    out.push(it);
   }
   return out;
 }
@@ -47,415 +33,309 @@ function shuffle<T>(arr: T[]) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    const tmp = a[i];
+    a[i] = a[j];
+    a[j] = tmp;
   }
   return a;
 }
 
-function clampInt(n: number, min: number, max: number) {
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, Math.floor(n)));
-}
+type CallerState = {
+  packId: string;
+  savedAt: number | null;
 
-function readTextFromLocalStorage(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
+  pool: string[];
+  remaining: string[];
+  called: string[];
+  lastBatch: string[];
+};
 
-function writeTextToLocalStorage(key: string, value: string) {
+function safeJsonParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
   try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // ignore
-  }
-}
-
-function writeJsonToLocalStorage(key: string, value: any) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // ignore
-  }
-}
-
-function readJsonFromLocalStorage<T>(key: string): T | null {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
     return JSON.parse(raw) as T;
   } catch {
     return null;
   }
 }
 
-function makeFreshState(poolLines: string[], drawCount = 10): CallerState {
-  const cleanPool = uniq(poolLines);
-  const shuffled = shuffle(cleanPool);
-  const now = Date.now();
-  return {
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-    poolLines: cleanPool,
-    remaining: shuffled,
-    called: [],
-    drawCount: clampInt(drawCount, 1, 25),
-    lastSavedAt: undefined,
-  };
+function saveCallerStateEverywhere(state: CallerState) {
+  try {
+    window.localStorage.setItem(CALLER_STATE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(packCallerKey(state.packId), JSON.stringify(state));
+    window.localStorage.setItem(LAST_PACK_KEY, state.packId);
+  } catch {
+    // ignore
+  }
 }
 
-function formatTime(ts?: number) {
-  if (!ts) return "";
+function formatSavedAt(ts: number | null) {
+  if (!ts) return "Never";
   try {
     return new Date(ts).toLocaleString();
   } catch {
-    return String(ts);
+    return "Saved";
   }
-}
-
-function Modal({
-  open,
-  title,
-  body,
-  confirmText = "Confirm",
-  cancelText = "Cancel",
-  danger,
-  onConfirm,
-  onCancel,
-  busy,
-}: {
-  open: boolean;
-  title: string;
-  body: React.ReactNode;
-  confirmText?: string;
-  cancelText?: string;
-  danger?: boolean;
-  busy?: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  if (!open) return null;
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.45)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-        zIndex: 9999,
-      }}
-      onMouseDown={onCancel}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 520,
-          background: "white",
-          borderRadius: 14,
-          border: "1px solid #e5e7eb",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
-          overflow: "hidden",
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>
-            {title}
-          </div>
-        </div>
-
-        <div style={{ padding: 16, color: "#111827", fontSize: 14 }}>
-          {body}
-        </div>
-
-        <div
-          style={{
-            padding: 16,
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 10,
-            borderTop: "1px solid #e5e7eb",
-            background: "#fafafa",
-          }}
-        >
-          <button
-            onClick={onCancel}
-            disabled={!!busy}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: "white",
-              cursor: busy ? "not-allowed" : "pointer",
-            }}
-          >
-            {cancelText}
-          </button>
-
-          <button
-            onClick={onConfirm}
-            disabled={!!busy}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid transparent",
-              background: danger ? "#b91c1c" : "#111827",
-              color: "white",
-              cursor: busy ? "not-allowed" : "pointer",
-              minWidth: 120,
-              fontWeight: 700,
-            }}
-          >
-            {busy ? "Working..." : confirmText}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export default function CallerPage() {
-  const [state, setState] = useState<CallerState | null>(null);
+  const [packId, setPackId] = useState<string>("");
+
+  // IMPORTANT: let mobile type freely; clamp only when drawing / blur.
+  const [drawCountInput, setDrawCountInput] = useState<string>("10");
+
   const [poolText, setPoolText] = useState<string>("");
+  const [poolItems, setPoolItems] = useState<string[]>([]);
 
+  const [remaining, setRemaining] = useState<string[]>([]);
+  const [called, setCalled] = useState<string[]>([]);
+  const [lastBatch, setLastBatch] = useState<string[]>([]);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+
+  const [statusMsg, setStatusMsg] = useState<string>("");
   const [error, setError] = useState<string>("");
-  const [info, setInfo] = useState<string>("");
 
+  // confirm modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmMode, setConfirmMode] = useState<"next" | "reset" | "undo" | null>(
-    null
-  );
-  const [busy, setBusy] = useState(false);
+  const [confirmCount, setConfirmCount] = useState<number>(0);
+  const [confirmPreview, setConfirmPreview] = useState<string[]>([]);
 
-  const poolLines = useMemo(() => normalizeLines(poolText), [poolText]);
+  const uniqueCount = poolItems.length;
 
-  const lastPackId = useMemo(() => {
-    return readTextFromLocalStorage(LAST_PACK_ID_KEY) || "";
-  }, []);
+  const drawCount = useMemo(() => {
+    // Clamp only when used
+    const raw = Number.parseInt(drawCountInput, 10);
+    if (!Number.isFinite(raw)) return 10;
+    return Math.max(1, Math.min(50, raw));
+  }, [drawCountInput]);
 
-  // Load logic (priority):
-  // 1) Always try POOL_KEY from generator first (most current weekly pool)
-  // 2) If missing, try restoring CALLER_STATE_KEY
-  // 3) If both missing, start empty
+  // initial load
   useEffect(() => {
-    const rawPool = readTextFromLocalStorage(POOL_KEY) || "";
-    const fromPoolKey = normalizeLines(rawPool);
+    const lp = window.localStorage.getItem(LAST_PACK_KEY) || "";
+    const resolvedPackId = lp || "pack_unknown";
+    setPackId(resolvedPackId);
 
-    if (fromPoolKey.length) {
-      const fresh = makeFreshState(fromPoolKey, 10);
-      setState(fresh);
-      setPoolText(fromPoolKey.join("\n"));
-      writeJsonToLocalStorage(CALLER_STATE_KEY, fresh);
-      setInfo(`Loaded pool from ${POOL_KEY}.`);
+    // Load pool
+    const rawPool = window.localStorage.getItem(POOL_KEY) || "";
+    const normalized = uniqCaseSensitive(normalizeLines(rawPool));
+    setPoolText(normalized.join("\n"));
+    setPoolItems(normalized);
+
+    // Load caller state (prefer per-pack)
+    const byPack = safeJsonParse<CallerState>(
+      window.localStorage.getItem(packCallerKey(resolvedPackId))
+    );
+    const global = safeJsonParse<CallerState>(
+      window.localStorage.getItem(CALLER_STATE_KEY)
+    );
+
+    const state =
+      (byPack && byPack.packId === resolvedPackId ? byPack : null) ||
+      (global && global.packId === resolvedPackId ? global : null);
+
+    if (state) {
+      setRemaining(state.remaining || []);
+      setCalled(state.called || []);
+      setLastBatch(state.lastBatch || []);
+      setLastSavedAt(state.savedAt ?? null);
+      setStatusMsg(`Loaded caller state for pack ${resolvedPackId}.`);
       return;
     }
 
-    const restored = readJsonFromLocalStorage<CallerState>(CALLER_STATE_KEY);
-    if (
-      restored?.version === 1 &&
-      Array.isArray(restored.remaining) &&
-      Array.isArray(restored.poolLines)
-    ) {
-      setState(restored);
-      setPoolText(restored.poolLines.join("\n"));
-      setInfo(`Restored caller state from ${CALLER_STATE_KEY}.`);
-      return;
-    }
-
-    const empty = makeFreshState([], 10);
-    setState(empty);
-    setPoolText("");
-    writeJsonToLocalStorage(CALLER_STATE_KEY, empty);
+    // No state yet: initialize
+    const initRemaining = shuffle(normalized);
+    setRemaining(initRemaining);
+    setCalled([]);
+    setLastBatch([]);
+    setLastSavedAt(null);
+    setStatusMsg(`Loaded pool from ${POOL_KEY}. Shuffled and ready.`);
   }, []);
 
-  // Persist state on change
+  // keep poolItems synced with text
   useEffect(() => {
-    if (!state) return;
-    writeJsonToLocalStorage(CALLER_STATE_KEY, state);
-  }, [state]);
+    const normalized = uniqCaseSensitive(normalizeLines(poolText));
+    setPoolItems(normalized);
+  }, [poolText]);
 
-  function applyPoolToState(newPoolLines: string[], setSavedAt?: boolean) {
-    const currentDrawCount = state?.drawCount ?? 10;
-    const fresh = makeFreshState(newPoolLines, currentDrawCount);
-    if (setSavedAt) fresh.lastSavedAt = Date.now();
-    setState(fresh);
+  function persistPoolOnly(items: string[]) {
+    try {
+      window.localStorage.setItem(POOL_KEY, items.join("\n"));
+    } catch {
+      // ignore
+    }
+  }
+
+  function ensurePackId() {
+    const lp = window.localStorage.getItem(LAST_PACK_KEY) || "";
+    const resolved = lp || packId || "pack_unknown";
+    setPackId(resolved);
+    return resolved;
+  }
+
+  function handleSavePoolAndReshuffle() {
     setError("");
-    setInfo(
-      `Saved + reshuffled. Pool stored in ${POOL_KEY}. State stored in ${CALLER_STATE_KEY}.`
+    const normalized = uniqCaseSensitive(normalizeLines(poolText));
+
+    if (normalized.length < 24) {
+      setError("Pool too small. Need at least 24 unique items.");
+      return;
+    }
+
+    const thisPackId = ensurePackId();
+    const shuffled = shuffle(normalized);
+
+    persistPoolOnly(normalized);
+
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: normalized,
+      remaining: shuffled,
+      called: [],
+      lastBatch: [],
+    };
+
+    setPoolItems(normalized);
+    setRemaining(shuffled);
+    setCalled([]);
+    setLastBatch([]);
+    setLastSavedAt(nextState.savedAt);
+
+    saveCallerStateEverywhere(nextState);
+
+    setStatusMsg(
+      `Saved pool to ${POOL_KEY} and reshuffled. Also saved caller state for pack ${thisPackId}. (${normalized.length} items)`
     );
   }
 
-  function openConfirm(mode: "next" | "reset" | "undo") {
-    setConfirmMode(mode);
+  function openConfirmNextDraw() {
+    setError("");
+
+    const thisPackId = ensurePackId();
+
+    if (poolItems.length < 24) {
+      setError("Pool too small. Need at least 24 unique items.");
+      return;
+    }
+    if (remaining.length === 0) {
+      setError("No remaining items. Game is exhausted.");
+      return;
+    }
+
+    const count = Math.min(drawCount, remaining.length);
+    const preview = remaining.slice(0, Math.min(count, 12));
+    setConfirmCount(count);
+    setConfirmPreview(preview);
     setConfirmOpen(true);
-    setError("");
-    setInfo("");
+
+    setStatusMsg(`Ready to draw ${count}. (Will save under pack ${thisPackId})`);
   }
 
-  function closeConfirm() {
+  function doNextDrawConfirmed() {
     setConfirmOpen(false);
-    setConfirmMode(null);
-    setBusy(false);
+    setError("");
+
+    const thisPackId = ensurePackId();
+
+    const count = Math.min(drawCount, remaining.length);
+    const batch = remaining.slice(0, count);
+    const nextRemaining = remaining.slice(count);
+    const nextCalled = [...called, ...batch];
+
+    setRemaining(nextRemaining);
+    setCalled(nextCalled);
+    setLastBatch(batch);
+
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: poolItems,
+      remaining: nextRemaining,
+      called: nextCalled,
+      lastBatch: batch,
+    };
+
+    setLastSavedAt(nextState.savedAt);
+    saveCallerStateEverywhere(nextState);
+
+    setStatusMsg(`Drew ${count}. Saved caller state for pack ${thisPackId}.`);
   }
 
-  function handleConfirm() {
-    if (!state || !confirmMode) return;
+  function undoLastBatch() {
+    setError("");
+    if (!lastBatch.length) return;
 
-    if (confirmMode === "reset") {
-      setBusy(true);
-      const fresh = makeFreshState(state.poolLines, state.drawCount);
-      fresh.lastSavedAt = state.lastSavedAt;
-      setState(fresh);
-      setBusy(false);
-      closeConfirm();
-      setInfo("Game reset. Deck reshuffled.");
+    const thisPackId = ensurePackId();
+
+    const nextCalled = called.slice(0, Math.max(0, called.length - lastBatch.length));
+    const nextRemaining = [...lastBatch, ...remaining];
+
+    setCalled(nextCalled);
+    setRemaining(nextRemaining);
+    setLastBatch([]);
+
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: poolItems,
+      remaining: nextRemaining,
+      called: nextCalled,
+      lastBatch: [],
+    };
+
+    setLastSavedAt(nextState.savedAt);
+    saveCallerStateEverywhere(nextState);
+    setStatusMsg("Undid last batch. Saved.");
+  }
+
+  function resetGame() {
+    setError("");
+
+    const thisPackId = ensurePackId();
+
+    const normalized = poolItems;
+    if (normalized.length < 24) {
+      setError("Pool too small. Need at least 24 unique items.");
       return;
     }
 
-    if (confirmMode === "undo") {
-      setBusy(true);
-      const k = clampInt(state.drawCount, 1, 25);
-      const undoCount = Math.min(k, state.called.length);
-      if (undoCount === 0) {
-        setBusy(false);
-        closeConfirm();
-        setInfo("Nothing to undo.");
-        return;
-      }
+    const reshuffled = shuffle(normalized);
 
-      const back = state.called.slice(state.called.length - undoCount);
-      const remaining = back.concat(state.remaining);
-      const called = state.called.slice(0, state.called.length - undoCount);
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: normalized,
+      remaining: reshuffled,
+      called: [],
+      lastBatch: [],
+    };
 
-      const next: CallerState = {
-        ...state,
-        updatedAt: Date.now(),
-        remaining,
-        called,
-      };
+    setRemaining(reshuffled);
+    setCalled([]);
+    setLastBatch([]);
+    setLastSavedAt(nextState.savedAt);
 
-      setState(next);
-      setBusy(false);
-      closeConfirm();
-      setInfo(`Undid last ${undoCount} call(s).`);
-      return;
-    }
-
-    if (confirmMode === "next") {
-      setBusy(true);
-
-      const remaining = state.remaining.slice();
-      if (remaining.length === 0) {
-        setBusy(false);
-        closeConfirm();
-        setInfo("Deck empty. Reset to reshuffle.");
-        return;
-      }
-
-      const k = clampInt(state.drawCount, 1, 25);
-      const batch: string[] = [];
-      for (let i = 0; i < k && remaining.length > 0; i++) {
-        const item = remaining.shift();
-        if (item) batch.push(item);
-      }
-
-      const next: CallerState = {
-        ...state,
-        updatedAt: Date.now(),
-        remaining,
-        called: state.called.concat(batch),
-      };
-
-      setState(next);
-      setBusy(false);
-      closeConfirm();
-      return;
-    }
+    saveCallerStateEverywhere(nextState);
+    setStatusMsg(`Game reset and reshuffled. Saved for pack ${thisPackId}.`);
   }
 
-  function savePoolAndReshuffle() {
-    const lines = uniq(poolLines);
-    if (lines.length === 0) {
-      setError("Pool is empty. Paste items (one per line).");
+  // Fix mobile “can’t delete” by clamping only on blur
+  function onDrawCountBlur() {
+    const n = Number.parseInt(drawCountInput, 10);
+    if (!Number.isFinite(n)) {
+      setDrawCountInput("10");
       return;
     }
-
-    // This is the “recall” location:
-    // - POOL_KEY is what Generator and Caller share
-    // - CALLER_STATE_KEY is the in-progress game state
-    writeTextToLocalStorage(POOL_KEY, lines.join("\n"));
-
-    applyPoolToState(lines, true);
+    const clamped = Math.max(1, Math.min(50, n));
+    setDrawCountInput(String(clamped));
   }
 
-  function setDrawCount(raw: string) {
-    const n = clampInt(Number.parseInt(raw, 10), 1, 25);
-    if (!state) return;
-    setState({ ...state, drawCount: n, updatedAt: Date.now() });
-  }
-
-  function openWinners() {
-    const packId = readTextFromLocalStorage(LAST_PACK_ID_KEY) || "";
-    if (!packId) {
-      setError(
-        `No packId found. Generate a pack first (Generator sets ${LAST_PACK_ID_KEY}).`
-      );
-      return;
-    }
-    const url = `/winners/${encodeURIComponent(packId)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
-  const calledLatest = state?.called.slice().reverse() ?? [];
-  const remainingCount = state?.remaining.length ?? 0;
-
-  const confirmTitle =
-    confirmMode === "next"
-      ? "Confirm next draw"
-      : confirmMode === "reset"
-      ? "Reset game"
-      : "Undo last draw";
-
-  const confirmBody =
-    confirmMode === "next" ? (
-      <div style={{ lineHeight: 1.5 }}>
-        <div>
-          Draw <b>{state?.drawCount ?? 10}</b> item(s) now?
-        </div>
-        <div style={{ marginTop: 8, color: "#6b7280" }}>
-          Remaining after draw:{" "}
-          <b>
-            {Math.max(
-              0,
-              (state?.remaining.length ?? 0) - (state?.drawCount ?? 10)
-            )}
-          </b>
-        </div>
-      </div>
-    ) : confirmMode === "reset" ? (
-      <div style={{ lineHeight: 1.5 }}>
-        This will clear called items and reshuffle the deck.
-      </div>
-    ) : (
-      <div style={{ lineHeight: 1.5 }}>
-        Undo the last <b>{state?.drawCount ?? 10}</b> call(s) (or fewer if less
-        were called).
-      </div>
-    );
-
-  const confirmDanger = confirmMode === "reset";
+  const winnersHref = packId ? `/winners/${encodeURIComponent(packId)}` : "/winners";
 
   return (
     <div
       style={{
-        maxWidth: 860,
+        maxWidth: 820,
         margin: "0 auto",
         padding: 16,
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
@@ -464,15 +344,14 @@ export default function CallerPage() {
       <div
         style={{
           display: "flex",
-          justifyContent: "space-between",
+          gap: 10,
           alignItems: "center",
-          gap: 12,
-          flexWrap: "wrap",
+          justifyContent: "space-between",
+          marginBottom: 12,
         }}
       >
-        <h1 style={{ marginTop: 0, fontSize: 30 }}>Caller</h1>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <h1 style={{ margin: 0, fontSize: 40 }}>Caller</h1>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <a
             href="/"
             style={{
@@ -483,161 +362,129 @@ export default function CallerPage() {
               textDecoration: "none",
               color: "#111827",
               display: "inline-block",
-              fontWeight: 700,
             }}
           >
             Back to Generator
           </a>
 
-          <button
-            onClick={openWinners}
+          <a
+            href={winnersHref}
             style={{
               padding: "10px 14px",
               borderRadius: 10,
               border: "1px solid #111827",
               background: "white",
+              textDecoration: "none",
               color: "#111827",
-              cursor: "pointer",
-              fontWeight: 700,
+              display: "inline-block",
             }}
           >
             Open Winners
-          </button>
+          </a>
         </div>
       </div>
 
-      <div style={{ marginTop: 6, color: "#6b7280", fontSize: 12 }}>
-        Pool key: <b>{POOL_KEY}</b> | Caller state: <b>{CALLER_STATE_KEY}</b>
-        {lastPackId ? (
-          <>
-            {" "}
-            | Last packId: <b>{lastPackId}</b>
-          </>
-        ) : null}
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
+        Pool key: <b>{POOL_KEY}</b> | Caller state: <b>{CALLER_STATE_KEY}</b> | Last packId:{" "}
+        <b>{packId || "None"}</b>
       </div>
 
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: 16,
-          marginTop: 12,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ minWidth: 220 }}>
-              <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>
-                Draw count (per click)
-              </label>
-              <input
-                value={String(state?.drawCount ?? 10)}
-                onChange={(e) => setDrawCount(e.target.value)}
-                inputMode="numeric"
-                style={{
-                  width: 160,
-                  padding: 12,
-                  borderRadius: 10,
-                  border: "1px solid #d1d5db",
-                  fontSize: 16,
-                }}
-              />
-              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-                Typical: 10
-              </div>
-            </div>
-
-            <div style={{ flex: 1, minWidth: 260 }}>
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>
-                Remaining: {remainingCount} | Called: {state?.called.length ?? 0}
-              </div>
-
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button
-                  onClick={() => openConfirm("next")}
-                  disabled={!state || remainingCount === 0}
-                  style={{
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "1px solid #111827",
-                    background:
-                      !state || remainingCount === 0 ? "#9ca3af" : "#111827",
-                    color: "white",
-                    cursor:
-                      !state || remainingCount === 0 ? "not-allowed" : "pointer",
-                    minWidth: 180,
-                    fontWeight: 800,
-                  }}
-                >
-                  Next draw
-                </button>
-
-                <button
-                  onClick={() => openConfirm("undo")}
-                  disabled={!state || (state?.called.length ?? 0) === 0}
-                  style={{
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "1px solid #111827",
-                    background:
-                      !state || (state?.called.length ?? 0) === 0
-                        ? "#9ca3af"
-                        : "white",
-                    cursor:
-                      !state || (state?.called.length ?? 0) === 0
-                        ? "not-allowed"
-                        : "pointer",
-                    minWidth: 180,
-                    fontWeight: 700,
-                  }}
-                >
-                  Undo last batch
-                </button>
-
-                <button
-                  onClick={() => openConfirm("reset")}
-                  disabled={!state}
-                  style={{
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "1px solid #b91c1c",
-                    background: "white",
-                    color: "#b91c1c",
-                    cursor: !state ? "not-allowed" : "pointer",
-                    minWidth: 160,
-                    fontWeight: 800,
-                  }}
-                >
-                  Reset game
-                </button>
-              </div>
-            </div>
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Draw count (per click)</div>
+            <input
+              value={drawCountInput}
+              onChange={(e) => setDrawCountInput(e.target.value)}
+              onBlur={onDrawCountBlur}
+              inputMode="numeric"
+              placeholder="10"
+              style={{
+                width: 180,
+                padding: 12,
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                fontSize: 16,
+              }}
+            />
+            <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>Min 1, max 50</div>
           </div>
 
-          <div style={{ marginTop: 8 }}>
-            <div
+          <div style={{ fontSize: 20, fontWeight: 700 }}>
+            Remaining: {remaining.length} | Called: {called.length}
+          </div>
+
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button
+              onClick={openConfirmNextDraw}
               style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                justifyContent: "space-between",
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #111827",
+                background: "#111827",
+                color: "white",
+                cursor: "pointer",
+                minWidth: 220,
               }}
             >
-              <div style={{ fontWeight: 800 }}>
-                Caller pool (one per line). Items:{" "}
-                <b>{uniq(poolLines).length}</b>
+              Next draw
+            </button>
+
+            <button
+              onClick={undoLastBatch}
+              disabled={!lastBatch.length}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #111827",
+                background: !lastBatch.length ? "#9ca3af" : "white",
+                cursor: !lastBatch.length ? "not-allowed" : "pointer",
+                minWidth: 220,
+              }}
+            >
+              Undo last batch
+            </button>
+
+            <button
+              onClick={resetGame}
+              style={{
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "1px solid #b91c1c",
+                background: "white",
+                color: "#b91c1c",
+                cursor: "pointer",
+                minWidth: 220,
+              }}
+            >
+              Reset game
+            </button>
+          </div>
+
+          <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+            Last saved: <b>{formatSavedAt(lastSavedAt)}</b>
+          </div>
+
+          <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 18 }}>
+                  Caller pool (one per line). Items: {uniqueCount}
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                  This saves to localStorage on this device.
+                </div>
               </div>
 
               <button
-                onClick={savePoolAndReshuffle}
+                onClick={handleSavePoolAndReshuffle}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 10,
                   border: "1px solid #111827",
                   background: "white",
                   cursor: "pointer",
-                  fontWeight: 700,
+                  minWidth: 220,
                 }}
               >
                 Save pool and reshuffle
@@ -654,63 +501,93 @@ export default function CallerPage() {
                 borderRadius: 10,
                 border: "1px solid #d1d5db",
                 padding: 12,
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                 fontSize: 14,
               }}
             />
 
-            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              Last saved: <b>{formatTime(state?.lastSavedAt) || "Never"}</b>
-            </div>
+            {statusMsg ? (
+              <div style={{ marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff" }}>
+                {statusMsg}
+              </div>
+            ) : null}
+
+            {error ? (
+              <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 700 }}>{error}</div>
+            ) : null}
           </div>
 
-          {error ? (
-            <div style={{ color: "#b91c1c", fontWeight: 700 }}>{error}</div>
-          ) : null}
-          {info ? <div style={{ color: "#111827" }}>{info}</div> : null}
+          <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 14 }}>
+            <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 10 }}>Called items (latest first)</div>
+            <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
+              {called.length === 0 ? (
+                <div style={{ color: "#6b7280" }}>No calls yet.</div>
+              ) : (
+                <ol style={{ margin: 0, paddingLeft: 22 }}>
+                  {[...called].reverse().map((item, idx) => (
+                    <li key={`${item}-${idx}`}>{item}</li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: 16,
-        }}
-      >
-        <div style={{ fontWeight: 900, marginBottom: 10, fontSize: 18 }}>
-          Called items (latest first)
+      {/* confirm modal */}
+      {confirmOpen ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 50,
+          }}
+        >
+          <div style={{ width: "100%", maxWidth: 520, background: "white", borderRadius: 16, padding: 16, border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 8 }}>Confirm next draw</div>
+            <div style={{ color: "#374151", marginBottom: 12 }}>
+              You are about to draw <b>{confirmCount}</b> item{confirmCount === 1 ? "" : "s"}.
+              This will be saved under pack <b>{packId}</b>.
+            </div>
+
+            {confirmPreview.length ? (
+              <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>Preview (first up)</div>
+                <ol style={{ margin: 0, paddingLeft: 22 }}>
+                  {confirmPreview.map((x) => (
+                    <li key={x}>{x}</li>
+                  ))}
+                </ol>
+                {confirmCount > confirmPreview.length ? (
+                  <div style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>
+                    Plus {confirmCount - confirmPreview.length} more...
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setConfirmOpen(false)}
+                style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111827", background: "white", cursor: "pointer" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doNextDrawConfirmed}
+                style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111827", background: "#111827", color: "white", cursor: "pointer" }}
+              >
+                Draw now
+              </button>
+            </div>
+          </div>
         </div>
-
-        {calledLatest.length === 0 ? (
-          <div style={{ color: "#6b7280" }}>No calls yet.</div>
-        ) : (
-          <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
-            {calledLatest.map((item, idx) => (
-              <li key={`${item}-${idx}`}>{item}</li>
-            ))}
-          </ol>
-        )}
-      </div>
-
-      <Modal
-        open={confirmOpen}
-        title={confirmTitle}
-        body={confirmBody}
-        confirmText={
-          confirmMode === "next"
-            ? "Draw now"
-            : confirmMode === "reset"
-            ? "Reset"
-            : "Undo"
-        }
-        cancelText="Cancel"
-        danger={confirmDanger}
-        busy={busy}
-        onConfirm={handleConfirm}
-        onCancel={closeConfirm}
-      />
+      ) : null}
     </div>
   );
-                    }
+              }
