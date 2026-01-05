@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import admin from "firebase-admin";
 import { renderToBuffer } from "@react-pdf/renderer";
+import React from "react";
 
 import { createBingoPack } from "@/lib/bingo";
 import BingoPackPdf from "@/pdf/BingoPackPdf";
@@ -16,10 +17,9 @@ function getFirebaseCreds(): admin.ServiceAccount {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON env var.");
 
-  // Vercel env var is a single string. It might include literal \n in private_key.
   const parsed = JSON.parse(raw) as ServiceAccountJson;
 
-  // Normalize private_key newlines if needed
+  // Normalize private_key newlines if needed (Vercel env var often stores \n literally)
   if (parsed.private_key && parsed.private_key.includes("\\n")) {
     parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
   }
@@ -28,8 +28,6 @@ function getFirebaseCreds(): admin.ServiceAccount {
     throw new Error("Service account JSON missing client_email or private_key.");
   }
 
-  // Admin SDK expects { projectId, clientEmail, privateKey } keys (camelCase)
-  // We map from the downloaded JSON shape.
   return {
     projectId: process.env.FIREBASE_PROJECT_ID || parsed.project_id,
     clientEmail: parsed.client_email,
@@ -62,17 +60,17 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    const title = typeof body.title === "string" ? body.title.trim() : "Harvest Heroes Bingo";
+    const title =
+      typeof body.title === "string" ? body.title.trim() : "Harvest Heroes Bingo";
     const sponsorName = typeof body.sponsorName === "string" ? body.sponsorName.trim() : "";
     const bannerImageUrl =
       typeof body.bannerImageUrl === "string" ? body.bannerImageUrl.trim() : "";
     const sponsorLogoUrl =
       typeof body.sponsorLogoUrl === "string" ? body.sponsorLogoUrl.trim() : "";
 
-    const gridSize = 5; // locked to 5x5 for now
+    const gridSize = 5;
     const qty = Math.min(Math.max(toInt(body.qty ?? body.quantity, 25), 1), 500);
 
-    // Items can come as a big textarea string, or as an array.
     const items: string[] = Array.isArray(body.items)
       ? body.items.map((x: any) => String(x).trim()).filter(Boolean)
       : typeof body.itemsText === "string"
@@ -88,48 +86,37 @@ export async function POST(req: Request) {
       );
     }
 
-    // Center label can be customized from UI later; for now allow optional override.
     const centerLabel =
       typeof body.centerLabel === "string" && body.centerLabel.trim()
         ? body.centerLabel.trim()
         : "Joe’s Grows";
 
-    // Generate pack (your lib/bingo.ts should produce ids + grids + weeklyPool + usedItems)
     const pack = createBingoPack(items, qty);
 
-    // IMPORTANT: Firestore does not allow nested arrays (string[][]),
-    // so we store each grid as a flat string[] plus gridSize metadata.
+    // Firestore does not allow nested arrays (string[][]),
+    // so store each grid as a flat array plus metadata.
     const cardsForDb = pack.cards.map((c) => ({
       id: c.id,
-      // Flatten row-major
       gridFlat: c.grid.flat(),
       gridSize,
       centerLabel,
     }));
 
-    // Generate PDF buffer
-    // Props here must match your pdf/BingoPackPdf.tsx prop names.
-    const pdfBuffer = await renderToBuffer(
-      // If your component is default-exported differently, adjust import.
-      // This assumes: export default function BingoPackPdf(props: Props) { ... }
-      (
-        // @ts-expect-error react-pdf runtime accepts this
-        <BingoPackPdf
-          title={title}
-          sponsorName={sponsorName}
-          bannerImageUrl={bannerImageUrl}
-          sponsorLogoUrl={sponsorLogoUrl}
-          centerLabel={centerLabel}
-          cards={pack.cards}
-          gridSize={gridSize}
-        />
-      ) as any
-    );
+    // IMPORTANT: No JSX in route.ts. Use React.createElement.
+    const pdfElement = React.createElement(BingoPackPdf as any, {
+      title,
+      sponsorName,
+      bannerImageUrl,
+      sponsorLogoUrl,
+      centerLabel,
+      cards: pack.cards,
+      gridSize,
+    });
 
+    const pdfBuffer = await renderToBuffer(pdfElement as any);
     const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
     const createdAt = Date.now();
 
-    // Save pack to Firestore (optional but now enabled)
     const app = getAdminApp();
     const db = admin.firestore(app);
 
@@ -142,17 +129,13 @@ export async function POST(req: Request) {
       centerLabel,
       gridSize,
       qty,
-      // weeklyPool is the pool actually used to generate cards (caller should sync to this)
       weeklyPool: pack.weeklyPool,
-      // union of items appearing on cards (excluding center)
       usedItems: pack.usedItems,
       cards: cardsForDb,
     };
 
-    // Write. Use server timestamp? You can, but keeping createdAt number is fine.
     const ref = await db.collection("packs").add(packDoc);
 
-    // Minimal CSV roster (Card ID only, you can expand later)
     const csv = ["cardId"].concat(pack.cards.map((c) => c.id)).join("\n");
 
     return NextResponse.json({
@@ -163,7 +146,7 @@ export async function POST(req: Request) {
       csv,
       usedItems: pack.usedItems,
       weeklyPool: pack.weeklyPool,
-      cards: pack.cards, // client can save locally if needed
+      cards: pack.cards,
     });
   } catch (err: any) {
     const msg = err?.message ? String(err.message) : "Unknown error";
@@ -171,7 +154,6 @@ export async function POST(req: Request) {
   }
 }
 
-// Simple health check for env + firebase init
 export async function GET() {
   try {
     getAdminApp();
