@@ -161,11 +161,7 @@ function downloadBase64Pdf(filename: string, base64: string) {
   URL.revokeObjectURL(url);
 }
 
-function downloadTextFile(
-  filename: string,
-  text: string,
-  mime = "text/plain;charset=utf-8"
-) {
+function downloadTextFile(filename: string, text: string, mime = "text/plain;charset=utf-8") {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -201,7 +197,6 @@ export default function Page() {
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
 
-  // Restore last pack so Back navigation doesn't gray out buttons
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(LAST_GENERATED_PACK_KEY);
@@ -215,7 +210,6 @@ export default function Page() {
     }
   }, []);
 
-  // Keep the shared pool synced for Caller reload
   useEffect(() => {
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
@@ -249,7 +243,6 @@ export default function Page() {
       return;
     }
 
-    // Ensure caller pool is synced before generating
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
     } catch {
@@ -271,6 +264,7 @@ export default function Page() {
         }),
       });
 
+      // IMPORTANT: API must return JSON (this fixes the %PDF error)
       const data = await res.json();
 
       if (!res.ok) {
@@ -294,41 +288,31 @@ export default function Page() {
 
       setPack(nextPack);
 
-      // Persist generator state so Back button doesn't gray out everything
       try {
         window.localStorage.setItem(LAST_GENERATED_PACK_KEY, JSON.stringify(nextPack));
       } catch {
         // ignore
       }
 
-      // FIX: Save last pack id and store a full pack object Caller can use (includes weeklyPool / usedItems)
       if (data?.cardsPack?.packId) {
         try {
           const packId = data.cardsPack.packId;
 
-          // Allow Caller to load instantly without scanning localStorage
           window.localStorage.setItem("grower-bingo:lastPackId:v1", packId);
 
-          // Store a complete BingoPack shape for Caller + Winners
           const storedPack = {
             ...data.cardsPack,
             weeklyPool:
-              Array.isArray(data.usedItems) && data.usedItems.length
-                ? data.usedItems
-                : poolLines,
+              Array.isArray(data.usedItems) && data.usedItems.length ? data.usedItems : poolLines,
             usedItems: Array.isArray(data.usedItems) ? data.usedItems : [],
           };
 
-          window.localStorage.setItem(
-            `grower-bingo:pack:${packId}`,
-            JSON.stringify(storedPack)
-          );
+          window.localStorage.setItem(`grower-bingo:pack:${packId}`, JSON.stringify(storedPack));
         } catch {
           // ignore
         }
       }
 
-      // Option B: if API returns usedItems, sync those to Caller pool
       if (Array.isArray(data.usedItems) && data.usedItems.length) {
         try {
           window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
@@ -337,15 +321,12 @@ export default function Page() {
         }
       }
 
-      // Auto download PDF
       const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
 
       setTimeout(() => {
         try {
           downloadBase64Pdf(filename, data.pdfBase64);
-          setInfo(
-            "PDF download triggered. If nothing happened, use the manual Download PDF button below."
-          );
+          setInfo("PDF download triggered. If nothing happened, use Download PDF below.");
         } catch (e: any) {
           setError(e?.message || "Could not trigger PDF download.");
         }
@@ -459,8 +440,8 @@ export default function Page() {
               }}
             />
             <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep
-              this value unchanged.
+              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep this value
+              unchanged.
             </div>
           </div>
 
@@ -621,9 +602,7 @@ export default function Page() {
                 background:
                   !pack?.cardsPack?.packId && !pack?.requestKey ? "#9ca3af" : "white",
                 cursor:
-                  !pack?.cardsPack?.packId && !pack?.requestKey
-                    ? "not-allowed"
-                    : "pointer",
+                  !pack?.cardsPack?.packId && !pack?.requestKey ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
@@ -647,13 +626,11 @@ export default function Page() {
           </div>
 
           {error ? (
-            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>
-              {error}
-            </div>
+            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div>
           ) : null}
           {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
     </div>
   );
-                  }
+}
