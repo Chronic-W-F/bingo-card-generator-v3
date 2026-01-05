@@ -1,130 +1,202 @@
+// app/api/generate/route.ts
 import { NextResponse } from "next/server";
 import admin from "firebase-admin";
-import { createBingoPack } from "@/lib/bingo";
+import React from "react";
 import { renderToBuffer } from "@react-pdf/renderer";
+import path from "path";
+import { readFile } from "fs/promises";
+
 import BingoPackPdf from "@/pdf/BingoPackPdf";
+import { createBingoPack } from "@/lib/bingo";
 
-// ---------- Firebase Init (safe for Vercel) ----------
-if (!admin.apps.length) {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+// Force Node runtime (we use fs + firebase-admin)
+export const runtime = "nodejs";
 
-  if (!raw) {
-    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON env var.");
+type ReqBody = {
+  title?: string;
+  sponsorName?: string;
+  bannerImageUrl?: string; // "/banners/current.png" preferred
+  sponsorLogoUrl?: string; // optional (not used in PDF yet unless your PDF supports it)
+  qty?: number;
+  items?: string[];
+};
+
+function safeJsonParse(raw: string | undefined) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
   }
-
-  const creds = JSON.parse(raw);
-
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: creds.project_id,
-      clientEmail: creds.client_email,
-      privateKey: String(creds.private_key).replace(/\\n/g, "\n"),
-    }),
-  });
 }
 
-// ---------- Helpers ----------
-function normalizeLines(input: string): string[] {
-  return input
-    .split(/\r?\n/g)
-    .map((s) => s.trim())
+function normalizeItems(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((x) => String(x ?? "").trim())
     .filter(Boolean);
 }
 
-// ---------- POST ----------
+function clampQty(n: unknown) {
+  const v = Number.parseInt(String(n ?? ""), 10);
+  if (!Number.isFinite(v)) return 25;
+  return Math.max(1, Math.min(500, v));
+}
+
+function toDataUri(mime: string, buf: Buffer) {
+  return `data:${mime};base64,${buf.toString("base64")}`;
+}
+
+async function loadBannerAsDataUri(bannerImageUrl?: string): Promise<string | undefined> {
+  if (!bannerImageUrl) return undefined;
+
+  // We only "guarantee" local banners in /public (your locked default)
+  // Example: "/banners/current.png"
+  if (bannerImageUrl.startsWith("/")) {
+    const abs = path.join(process.cwd(), "public", bannerImageUrl.replace(/^\//, ""));
+    try {
+      const buf = await readFile(abs);
+      // crude mime detection
+      const lower = bannerImageUrl.toLowerCase();
+      const mime =
+        lower.endsWith(".png")
+          ? "image/png"
+          : lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+          ? "image/jpeg"
+          : lower.endsWith(".webp")
+          ? "image/webp"
+          : "application/octet-stream";
+
+      return toDataUri(mime, buf);
+    } catch {
+      // If file is missing, just skip the banner (better than failing)
+      return undefined;
+    }
+  }
+
+  // If you ever pass a full https URL, let react-pdf fetch it (works sometimes),
+  // but data-uri is most reliable. You can upgrade later if needed.
+  return bannerImageUrl;
+}
+
+function getAdminApp() {
+  if (admin.apps.length) return admin.app();
+
+  const credsRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const credsJson = safeJsonParse(credsRaw);
+
+  if (!credsJson) {
+    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON env var.");
+  }
+
+  // firebase-admin expects keys like projectId/clientEmail/privateKey
+  // Service account JSON may include snake_case fields.
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    credsJson.projectId ||
+    credsJson.project_id ||
+    undefined;
+
+  admin.initializeApp({
+    credential: admin.credential.cert(credsJson),
+    ...(projectId ? { projectId } : {}),
+  });
+
+  return admin.app();
+}
+
+function cardsToFirestore(cards: { id: string; grid: string[][] }[]) {
+  // Firestore does NOT allow nested arrays like string[][]
+  // Store as flat list + size
+  return cards.map((c) => {
+    const size = c.grid.length;
+    const gridFlat = c.grid.flat();
+    return { id: c.id, size, gridFlat };
+  });
+}
+
+function buildCsv(cards: { id: string; grid: string[][] }[]) {
+  // Simple roster: Card ID + 25 squares (including center)
+  // If you want to exclude center later, we can.
+  const header = ["card_id", ...Array.from({ length: 25 }, (_, i) => `sq_${i + 1}`)].join(",");
+  const rows = cards.map((c) => {
+    const flat = c.grid.flat().map((x) => `"${String(x).replace(/"/g, '""')}"`);
+    return [`"${c.id}"`, ...flat].join(",");
+  });
+  return [header, ...rows].join("\n");
+}
+
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = (await req.json()) as ReqBody;
 
-    // Quantity
-    const qtyRaw = body.qty ?? body.quantity ?? 1;
-    const qty = Math.max(1, Math.min(500, Number(qtyRaw) || 1));
+    const title = String(body.title ?? "Harvest Heroes Bingo");
+    const sponsorName = String(body.sponsorName ?? "");
+    const qty = clampQty(body.qty);
+    const items = normalizeItems(body.items);
 
-    // Metadata
-    const title =
-      typeof body.title === "string" && body.title.trim()
-        ? body.title
-        : "Harvest Heroes Bingo";
-
-    const sponsorName =
-      typeof body.sponsorName === "string" && body.sponsorName.trim()
-        ? body.sponsorName
-        : "Joe’s Grows";
-
-    const bannerImageUrl =
-      typeof body.bannerImageUrl === "string" && body.bannerImageUrl.trim()
-        ? body.bannerImageUrl.trim()
-        : undefined;
-
-    // ---------- Pool input (accept ANY UI variant) ----------
-    let itemsText = "";
-
-    const candidates = [
-      body.itemsText,
-      body.items,
-      body.pool,
-      body.poolText,
-      body.squarePool,
-      body.squarePoolText,
-      body.square_pool,
-      body.square_pool_text,
-    ];
-
-    for (const v of candidates) {
-      if (typeof v === "string" && v.trim()) {
-        itemsText = v;
-        break;
-      }
-      if (Array.isArray(v) && v.every((x: any) => typeof x === "string")) {
-        itemsText = v.join("\n");
-        break;
-      }
-    }
-
-    const pool = normalizeLines(itemsText);
-
-    if (pool.length < 24) {
+    if (items.length < 24) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: `Need at least 24 pool items (one per line). Got: ${pool.length}`,
-          debug: {
-            receivedKeys: Object.keys(body ?? {}),
-            preview: itemsText.slice(0, 180),
-          },
-        },
+        { ok: false, error: `Need at least 24 pool items. Got ${items.length}.` },
         { status: 400 }
       );
     }
 
-    // ---------- Generate cards ----------
-    const pack = createBingoPack(pool, qty);
+    // Create bingo pack (your lib controls uniqueness rules)
+    const cardsPack = createBingoPack(items, qty);
 
-    // ---------- Render PDF ----------
-    const pdfBuffer = await renderToBuffer(
-      BingoPackPdf({
-        cards: pack.cards,
+    // Banner: read /public/banners/current.png and convert to data-uri
+    const bannerDataUri = await loadBannerAsDataUri(body.bannerImageUrl);
+
+    // Render PDF buffer (no JSX in this file; use React.createElement)
+    const pdfElement = React.createElement(BingoPackPdf as any, {
+      cards: cardsPack.cards,
+      title,
+      sponsorName,
+      bannerImageUrl: bannerDataUri,
+    });
+
+    const pdfBuffer = await renderToBuffer(pdfElement);
+
+    const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
+    const csv = buildCsv(cardsPack.cards);
+
+    // Save pack to Firestore (optional but you are using firebase-admin now)
+    const app = getAdminApp();
+    const db = admin.firestore(app);
+
+    // Store a Firestore-safe shape
+    const firestorePack = {
+      packId: cardsPack.packId,
+      createdAt: cardsPack.createdAt,
+      title,
+      sponsorName,
+      usedItems: cardsPack.usedItems ?? [],
+      weeklyPool: cardsPack.weeklyPool ?? [],
+      cards: cardsToFirestore(cardsPack.cards),
+    };
+
+    await db.collection("bingoPacks").doc(cardsPack.packId).set(firestorePack, { merge: true });
+
+    return NextResponse.json({
+      ok: true,
+      pdfBase64,
+      csv,
+      createdAt: cardsPack.createdAt,
+      requestKey: cardsPack.packId,
+      usedItems: cardsPack.usedItems ?? [],
+      cardsPack: {
+        packId: cardsPack.packId,
+        createdAt: cardsPack.createdAt,
         title,
         sponsorName,
-        bannerImageUrl,
-      })
-    );
-
-    // ✅ TS-safe for Vercel: Buffer -> Uint8Array (valid BodyInit)
-    const pdfBytes = new Uint8Array(pdfBuffer);
-
-    return new NextResponse(pdfBytes, {
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="bingo-cards.pdf"`,
-        "Cache-Control": "no-store",
+        // Keep the original nested grid ONLY for localStorage use in the browser
+        // (Firestore-safe version is stored in DB)
+        cards: cardsPack.cards,
       },
     });
-  } catch (err: any) {
-    console.error(err);
-    return NextResponse.json(
-      { ok: false, error: err?.message || "Unknown error" },
-      { status: 500 }
-    );
+  } catch (e: any) {
+    const msg = e?.message || "Generate failed.";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
