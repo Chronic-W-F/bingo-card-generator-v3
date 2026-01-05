@@ -2,30 +2,45 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-type BingoCard = {
-  id: string;
-  grid: string[][];
-};
+const POOL_KEY = "grower-bingo:pool:v1"; // Option B pool sync
+const CALLER_STATE_KEY = "grower-bingo:callerState:v1";
 
-type BingoPack = {
-  packId: string;
+type CallerState = {
+  version: 1;
   createdAt: number;
-  title?: string;
-  sponsorName?: string;
-  cards: BingoCard[];
-  weeklyPool: string[];
-  usedItems: string[];
+  updatedAt: number;
+
+  // Pool data
+  poolLines: string[]; // source pool (what Caller is drawing from)
+  remaining: string[]; // remaining items to draw (shuffled)
+  called: string[]; // called items in order
+
+  // Settings
+  drawCount: number; // how many to draw per click
 };
 
-const CALLER_STATE_KEY = "grower-bingo:caller:v2";
-const LAST_PACK_KEY = "grower-bingo:lastPackId:v1";
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function normalizeLines(text: string): string[] {
+  return text
+    .split(/\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
+function uniq(lines: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const l of lines) {
+    const k = l.trim();
+    if (!k) continue;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
+function shuffle<T>(arr: T[]) {
+  const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
@@ -33,467 +48,567 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-function normalizeLines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
+function clampInt(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-function safeParseInt(s: string, fallback: number) {
-  const n = Number.parseInt(s, 10);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function packStorageKey(packId: string) {
-  return `grower-bingo:pack:${packId}`;
-}
-
-function drawsStorageKey(packId: string) {
-  return `grower-bingo:draws:${packId}`;
-}
-
-// Find the latest packId by scanning localStorage keys.
-function findLatestPackId(): string | null {
+function readTextFromLocalStorage(key: string): string | null {
   try {
-    const keys = Object.keys(window.localStorage);
-    const packKeys = keys.filter((k) => k.startsWith("grower-bingo:pack:"));
-    if (!packKeys.length) return null;
-
-    let bestId: string | null = null;
-    let bestCreated = -1;
-
-    for (const k of packKeys) {
-      const raw = window.localStorage.getItem(k);
-      if (!raw) continue;
-      try {
-        const p = JSON.parse(raw) as BingoPack;
-        if (p?.packId && typeof p.createdAt === "number") {
-          if (p.createdAt > bestCreated) {
-            bestCreated = p.createdAt;
-            bestId = p.packId;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    return bestId;
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-type CallerState = {
-  packId: string | null;
-  poolText: string;
-
-  deckSize: number;
-  drawSize: number;
-
-  deckSizeInput: string;
-  drawSizeInput: string;
-
-  round: number;
-  deck: string[];
-  called: string[];
-  draws: string[][];
-};
-
-export default function CallerPage() {
-  const [status, setStatus] = useState<string>("Loading latest pack...");
-  const [pack, setPack] = useState<BingoPack | null>(null);
-
-  const [poolText, setPoolText] = useState<string>("");
-
-  const poolLines = useMemo(() => normalizeLines(poolText), [poolText]);
-  const poolCount = poolLines.length;
-
-  const [deckSize, setDeckSize] = useState<number>(50);
-  const [drawSize, setDrawSize] = useState<number>(10);
-
-  const [deckSizeInput, setDeckSizeInput] = useState<string>("50");
-  const [drawSizeInput, setDrawSizeInput] = useState<string>("10");
-
-  const [round, setRound] = useState<number>(0);
-  const [deck, setDeck] = useState<string[]>([]);
-  const [called, setCalled] = useState<string[]>([]);
-  const [draws, setDraws] = useState<string[][]>([]);
-
-  // Load caller state + latest pack on mount
-  useEffect(() => {
-    // 1) restore caller state if present
-    const rawState = window.localStorage.getItem(CALLER_STATE_KEY);
-    if (rawState) {
-      try {
-        const s = JSON.parse(rawState) as CallerState;
-
-        setPoolText(s.poolText ?? "");
-        setDeckSize(Number.isFinite(s.deckSize) ? s.deckSize : 50);
-        setDrawSize(Number.isFinite(s.drawSize) ? s.drawSize : 10);
-
-        setDeckSizeInput((s.deckSizeInput ?? "").trim() || "50");
-        setDrawSizeInput((s.drawSizeInput ?? "").trim() || "10");
-
-        setRound(Number.isFinite(s.round) ? s.round : 0);
-        setDeck(Array.isArray(s.deck) ? s.deck : []);
-        setCalled(Array.isArray(s.called) ? s.called : []);
-        setDraws(Array.isArray(s.draws) ? s.draws : []);
-      } catch {
-        // ignore
-      }
-    }
-
-    // 2) load latest pack (prefer lastPackId, else scan localStorage)
-    const remembered = window.localStorage.getItem(LAST_PACK_KEY);
-    const latestId = remembered || findLatestPackId();
-
-    if (!latestId) {
-      setStatus("No pack found on this device. Generate a pack first.");
-      return;
-    }
-
-    const rawPack = window.localStorage.getItem(packStorageKey(latestId));
-    if (!rawPack) {
-      setStatus("Latest packId found, but pack data missing. Generate again.");
-      return;
-    }
-
-    try {
-      const p = JSON.parse(rawPack) as BingoPack;
-      setPack(p);
-
-      // ✅ IMPORTANT CHANGE:
-      // Caller should draw from usedItems (union of all squares across all cards).
-      // This guarantees every call can matter and guarantees a winner by exhausting the deck.
-      const poolFromPack =
-        Array.isArray(p.usedItems) && p.usedItems.length
-          ? p.usedItems
-          : Array.isArray(p.weeklyPool) && p.weeklyPool.length
-            ? p.weeklyPool
-            : [];
-
-      const nextPoolText = poolFromPack.join("\n");
-      setPoolText(nextPoolText);
-
-      // If we don't already have a running deck, initialize defaults based on pool size
-      const maxDeck = Math.max(1, poolFromPack.length || 1);
-      const ds = clamp(safeParseInt(deckSizeInput, deckSize), 1, maxDeck);
-      const dr = clamp(safeParseInt(drawSizeInput, drawSize), 1, ds);
-
-      setDeckSize(ds);
-      setDrawSize(dr);
-      setDeckSizeInput(String(ds));
-      setDrawSizeInput(String(dr));
-
-      // If we have no deck yet, auto-start
-      setDeck((prev) => {
-        if (prev && prev.length) return prev;
-        const shuffled = shuffle(poolFromPack);
-        return shuffled.slice(0, ds);
-      });
-
-      setStatus("Loaded latest pack + caller pool automatically.");
-    } catch {
-      setStatus("Failed to parse pack data. Generate a new pack.");
-    }
-  }, []);
-
-  // Persist caller state
-  useEffect(() => {
-    const state: CallerState = {
-      packId: pack?.packId ?? null,
-      poolText,
-      deckSize,
-      drawSize,
-      deckSizeInput,
-      drawSizeInput,
-      round,
-      deck,
-      called,
-      draws,
-    };
-    try {
-      window.localStorage.setItem(CALLER_STATE_KEY, JSON.stringify(state));
-    } catch {
-      // ignore
-    }
-  }, [pack, poolText, deckSize, drawSize, deckSizeInput, drawSizeInput, round, deck, called, draws]);
-
-  // Persist draws to the pack-specific key so Winners can read them
-  useEffect(() => {
-    if (!pack?.packId) return;
-    try {
-      const text = draws
-        .map((batch, idx) => {
-          const day = idx + 1;
-          return `Day ${day}:\n${batch.join("\n")}`;
-        })
-        .join("\n\n");
-
-      window.localStorage.setItem(drawsStorageKey(pack.packId), text);
-    } catch {
-      // ignore
-    }
-  }, [pack, draws]);
-
-  // Clamp ONLY on blur
-  function clampDeckOnBlur() {
-    const maxDeck = Math.max(1, poolCount || 1);
-    const wanted = safeParseInt(deckSizeInput, deckSize);
-    const next = clamp(wanted, 1, maxDeck);
-    setDeckSize(next);
-    setDeckSizeInput(String(next));
-
-    const wantedDraw = safeParseInt(drawSizeInput, drawSize);
-    const nextDraw = clamp(wantedDraw, 1, next);
-    setDrawSize(nextDraw);
-    setDrawSizeInput(String(nextDraw));
+function writeJsonToLocalStorage(key: string, value: any) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore
   }
+}
 
-  function clampDrawOnBlur() {
-    const wanted = safeParseInt(drawSizeInput, drawSize);
-    const next = clamp(wanted, 1, Math.max(1, deckSize));
-    setDrawSize(next);
-    setDrawSizeInput(String(next));
+function readJsonFromLocalStorage<T>(key: string): T | null {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
   }
+}
 
-  function startGame() {
-    const maxDeck = Math.max(1, poolCount || 1);
-    const ds = clamp(safeParseInt(deckSizeInput, deckSize), 1, maxDeck);
-    const dr = clamp(safeParseInt(drawSizeInput, drawSize), 1, ds);
+function makeFreshState(poolLines: string[], drawCount = 10): CallerState {
+  const cleanPool = uniq(poolLines);
+  const shuffled = shuffle(cleanPool);
+  const now = Date.now();
+  return {
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    poolLines: cleanPool,
+    remaining: shuffled,
+    called: [],
+    drawCount: clampInt(drawCount, 1, 25),
+  };
+}
 
-    setDeckSize(ds);
-    setDrawSize(dr);
-    setDeckSizeInput(String(ds));
-    setDrawSizeInput(String(dr));
-
-    const shuffled = shuffle(poolLines);
-    const newDeck = shuffled.slice(0, ds);
-
-    setDeck(newDeck);
-    setCalled([]);
-    setDraws([]);
-    setRound(0);
-  }
-
-  function resetGame() {
-    setDeck([]);
-    setCalled([]);
-    setDraws([]);
-    setRound(0);
-  }
-
-  function nextDraw() {
-    if (!deck.length) return;
-
-    const remaining = deck.filter((x) => !called.includes(x));
-    if (!remaining.length) return;
-
-    const wanted = safeParseInt(drawSizeInput, drawSize);
-    const n = clamp(wanted, 1, remaining.length);
-
-    const ok = window.confirm(`Draw next ${n} item(s)?`);
-    if (!ok) return;
-
-    const batch = remaining.slice(0, n);
-
-    setCalled((prev) => [...prev, ...batch]);
-    setDraws((prev) => [...prev, batch]);
-    setRound((prev) => prev + 1);
-  }
-
-  const calledCount = called.length;
-  const remainingCount = Math.max(0, deck.length - called.length);
-
-  const canStart = poolCount > 0;
-  const hasGame = deck.length > 0;
-
-  const packId = pack?.packId ?? null;
-  const winnersUrl = packId ? `/winners/${encodeURIComponent(packId)}` : "/winners";
+function Modal({
+  open,
+  title,
+  body,
+  confirmText = "Confirm",
+  cancelText = "Cancel",
+  danger,
+  onConfirm,
+  onCancel,
+  busy,
+}: {
+  open: boolean;
+  title: string;
+  body: React.ReactNode;
+  confirmText?: string;
+  cancelText?: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!open) return null;
 
   return (
     <div
       style={{
-        maxWidth: 720,
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        zIndex: 9999,
+      }}
+      onMouseDown={onCancel}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 520,
+          background: "white",
+          borderRadius: 14,
+          border: "1px solid #e5e7eb",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+          overflow: "hidden",
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>
+            {title}
+          </div>
+        </div>
+
+        <div style={{ padding: 16, color: "#111827", fontSize: 14 }}>
+          {body}
+        </div>
+
+        <div
+          style={{
+            padding: 16,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 10,
+            borderTop: "1px solid #e5e7eb",
+            background: "#fafafa",
+          }}
+        >
+          <button
+            onClick={onCancel}
+            disabled={!!busy}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            {cancelText}
+          </button>
+
+          <button
+            onClick={onConfirm}
+            disabled={!!busy}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid transparent",
+              background: danger ? "#b91c1c" : "#111827",
+              color: "white",
+              cursor: busy ? "not-allowed" : "pointer",
+              minWidth: 120,
+              fontWeight: 700,
+            }}
+          >
+            {busy ? "Working..." : confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function CallerPage() {
+  const [state, setState] = useState<CallerState | null>(null);
+  const [poolText, setPoolText] = useState<string>("");
+
+  const [error, setError] = useState<string>("");
+  const [info, setInfo] = useState<string>("");
+
+  // Nice confirmation modal
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmMode, setConfirmMode] = useState<
+    "next" | "reset" | "undo" | null
+  >(null);
+
+  const [busy, setBusy] = useState(false);
+
+  const poolLines = useMemo(() => normalizeLines(poolText), [poolText]);
+
+  // Initial load: restore state if exists, else load pool from Option B key
+  useEffect(() => {
+    const restored = readJsonFromLocalStorage<CallerState>(CALLER_STATE_KEY);
+    if (restored?.version === 1 && Array.isArray(restored.remaining)) {
+      setState(restored);
+      setPoolText(restored.poolLines.join("\n"));
+      return;
+    }
+
+    const rawPool = readTextFromLocalStorage(POOL_KEY) || "";
+    const lines = normalizeLines(rawPool);
+
+    if (lines.length) {
+      const fresh = makeFreshState(lines, 10);
+      setState(fresh);
+      setPoolText(lines.join("\n"));
+      writeJsonToLocalStorage(CALLER_STATE_KEY, fresh);
+      setInfo("Caller loaded pool from generator (Option B).");
+      return;
+    }
+
+    // Fallback empty
+    setPoolText("");
+    setState(makeFreshState([], 10));
+  }, []);
+
+  // Persist any state change
+  useEffect(() => {
+    if (!state) return;
+    writeJsonToLocalStorage(CALLER_STATE_KEY, state);
+  }, [state]);
+
+  function applyPoolToState(newPoolLines: string[]) {
+    const currentDrawCount = state?.drawCount ?? 10;
+    const fresh = makeFreshState(newPoolLines, currentDrawCount);
+    setState(fresh);
+    setError("");
+    setInfo(
+      `Pool loaded. ${fresh.poolLines.length} unique items. Shuffled and ready.`
+    );
+  }
+
+  function openConfirm(mode: "next" | "reset" | "undo") {
+    setConfirmMode(mode);
+    setConfirmOpen(true);
+    setError("");
+    setInfo("");
+  }
+
+  function closeConfirm() {
+    setConfirmOpen(false);
+    setConfirmMode(null);
+    setBusy(false);
+  }
+
+  function handleConfirm() {
+    if (!state || !confirmMode) return;
+
+    if (confirmMode === "reset") {
+      setBusy(true);
+      const fresh = makeFreshState(state.poolLines, state.drawCount);
+      setState(fresh);
+      setBusy(false);
+      closeConfirm();
+      setInfo("Game reset. Deck reshuffled.");
+      return;
+    }
+
+    if (confirmMode === "undo") {
+      // Undo last batch draw: we do this by restoring items from the end of called
+      // We store no explicit batches, so we undo the last drawCount items (or whatever exists).
+      setBusy(true);
+      const k = clampInt(state.drawCount, 1, 25);
+      const undoCount = Math.min(k, state.called.length);
+      if (undoCount === 0) {
+        setBusy(false);
+        closeConfirm();
+        setInfo("Nothing to undo.");
+        return;
+      }
+      const back = state.called.slice(state.called.length - undoCount);
+      const remaining = back.concat(state.remaining);
+      const called = state.called.slice(0, state.called.length - undoCount);
+
+      const next: CallerState = {
+        ...state,
+        updatedAt: Date.now(),
+        remaining,
+        called,
+      };
+      setState(next);
+      setBusy(false);
+      closeConfirm();
+      setInfo(`Undid last ${undoCount} call(s).`);
+      return;
+    }
+
+    if (confirmMode === "next") {
+      setBusy(true);
+
+      const remaining = state.remaining.slice();
+      if (remaining.length === 0) {
+        setBusy(false);
+        closeConfirm();
+        setInfo("Deck empty. Reset to reshuffle.");
+        return;
+      }
+
+      const k = clampInt(state.drawCount, 1, 25);
+      const batch: string[] = [];
+      for (let i = 0; i < k && remaining.length > 0; i++) {
+        const item = remaining.shift();
+        if (item) batch.push(item);
+      }
+
+      const next: CallerState = {
+        ...state,
+        updatedAt: Date.now(),
+        remaining,
+        called: state.called.concat(batch),
+      };
+
+      setState(next);
+      setBusy(false);
+      closeConfirm();
+      return;
+    }
+  }
+
+  function savePoolEdits() {
+    const lines = uniq(poolLines);
+    if (lines.length === 0) {
+      setError("Pool is empty. Paste items (one per line).");
+      return;
+    }
+    // Keep Option B in sync
+    try {
+      window.localStorage.setItem(POOL_KEY, lines.join("\n"));
+    } catch {
+      // ignore
+    }
+    applyPoolToState(lines);
+  }
+
+  function setDrawCount(raw: string) {
+    const n = clampInt(Number.parseInt(raw, 10), 1, 25);
+    if (!state) return;
+    setState({ ...state, drawCount: n, updatedAt: Date.now() });
+  }
+
+  const calledLatest = state?.called.slice().reverse() ?? [];
+  const remainingCount = state?.remaining.length ?? 0;
+
+  const confirmTitle =
+    confirmMode === "next"
+      ? "Confirm next draw"
+      : confirmMode === "reset"
+      ? "Reset game"
+      : "Undo last draw";
+
+  const confirmBody =
+    confirmMode === "next" ? (
+      <div style={{ lineHeight: 1.5 }}>
+        <div>
+          Draw <b>{state?.drawCount ?? 10}</b> item(s) now?
+        </div>
+        <div style={{ marginTop: 8, color: "#6b7280" }}>
+          Remaining after draw:{" "}
+          <b>
+            {Math.max(
+              0,
+              (state?.remaining.length ?? 0) - (state?.drawCount ?? 10)
+            )}
+          </b>
+        </div>
+      </div>
+    ) : confirmMode === "reset" ? (
+      <div style={{ lineHeight: 1.5 }}>
+        This will clear called items and reshuffle the deck.
+      </div>
+    ) : (
+      <div style={{ lineHeight: 1.5 }}>
+        Undo the last <b>{state?.drawCount ?? 10}</b> call(s) (or fewer if less
+        were called).
+      </div>
+    );
+
+  const confirmDanger = confirmMode === "reset";
+
+  return (
+    <div
+      style={{
+        maxWidth: 860,
         margin: "0 auto",
         padding: 16,
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontSize: 24 }}>Grower Bingo — Caller</h1>
-        <div style={{ marginTop: 8, fontSize: 13, color: "#374151" }}>Status: {status}</div>
+      <h1 style={{ marginTop: 0, fontSize: 30 }}>Caller</h1>
 
-        <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>
-          Pack: <b>{packId ?? "None"}</b>
-          {pack?.title ? (
-            <>
-              {" "}
-              | Title: <b>{pack.title}</b>
-            </>
-          ) : null}
-          {pack?.cards?.length ? (
-            <>
-              {" "}
-              | Cards: <b>{pack.cards.length}</b>
-            </>
-          ) : null}
-        </div>
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 220 }}>
+              <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>
+                Draw count (per click)
+              </label>
+              <input
+                value={String(state?.drawCount ?? 10)}
+                onChange={(e) => setDrawCount(e.target.value)}
+                inputMode="numeric"
+                style={{
+                  width: 160,
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid #d1d5db",
+                  fontSize: 16,
+                }}
+              />
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Typical: 10
+              </div>
+            </div>
 
-        <div style={{ marginTop: 12, display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <a
-            href={winnersUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              display: "inline-block",
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: "#111827",
-              color: "white",
-              textDecoration: "none",
-            }}
-          >
-            Open Winners
-          </a>
-        </div>
-      </div>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>
+                Remaining: {remainingCount} | Called: {state?.called.length ?? 0}
+              </div>
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Caller Pool (auto-loaded) — Count: {poolCount}</h2>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => openConfirm("next")}
+                  disabled={!state || remainingCount === 0}
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "1px solid #111827",
+                    background:
+                      !state || remainingCount === 0 ? "#9ca3af" : "#111827",
+                    color: "white",
+                    cursor:
+                      !state || remainingCount === 0 ? "not-allowed" : "pointer",
+                    minWidth: 180,
+                    fontWeight: 800,
+                  }}
+                >
+                  Next draw
+                </button>
 
-        <textarea
-          value={poolText}
-          readOnly
-          rows={8}
-          style={{
-            marginTop: 12,
-            width: "100%",
-            borderRadius: 10,
-            border: "1px solid #d1d5db",
-            padding: 12,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            fontSize: 14,
-            background: "#f9fafb",
-          }}
-        />
-        <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
-          This pool is taken from the generated pack’s <b>usedItems</b> (fallback: weeklyPool). No manual typing needed.
-        </div>
-      </div>
+                <button
+                  onClick={() => openConfirm("undo")}
+                  disabled={!state || (state?.called.length ?? 0) === 0}
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "1px solid #111827",
+                    background:
+                      !state || (state?.called.length ?? 0) === 0
+                        ? "#9ca3af"
+                        : "white",
+                    cursor:
+                      !state || (state?.called.length ?? 0) === 0
+                        ? "not-allowed"
+                        : "pointer",
+                    minWidth: 180,
+                    fontWeight: 700,
+                  }}
+                >
+                  Undo last batch
+                </button>
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Deck size</label>
-        <input
-          value={deckSizeInput}
-          onChange={(e) => setDeckSizeInput(e.target.value)}
-          onBlur={clampDeckOnBlur}
-          inputMode="numeric"
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-        <div style={{ marginTop: 6, fontSize: 13, color: "#6b7280" }}>
-          Must be ≤ pool count. (Clamps on blur / Start Game.)
-        </div>
-
-        <div style={{ height: 12 }} />
-
-        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Draw size</label>
-        <input
-          value={drawSizeInput}
-          onChange={(e) => setDrawSizeInput(e.target.value)}
-          onBlur={clampDrawOnBlur}
-          inputMode="numeric"
-          style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 16 }}
-        />
-        <div style={{ marginTop: 6, fontSize: 13, color: "#6b7280" }}>
-          Must be ≤ deck size. (Clamps on blur / Start Game.)
-        </div>
-
-        <div style={{ marginTop: 16, display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <button
-            onClick={startGame}
-            disabled={!canStart}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: canStart ? "#111827" : "#9ca3af",
-              color: "white",
-              cursor: canStart ? "pointer" : "not-allowed",
-            }}
-          >
-            Start Game
-          </button>
-
-          <button
-            onClick={resetGame}
-            style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #111827", background: "white" }}
-          >
-            Reset
-          </button>
-
-          <button
-            onClick={nextDraw}
-            disabled={!hasGame || remainingCount === 0}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111827",
-              background: !hasGame || remainingCount === 0 ? "#9ca3af" : "white",
-              cursor: !hasGame || remainingCount === 0 ? "not-allowed" : "pointer",
-            }}
-          >
-            Next draw
-          </button>
-        </div>
-
-        <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Round</div>
-            <div style={{ fontSize: 22, fontWeight: 700 }}>{round}</div>
-          </div>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Called</div>
-            <div style={{ fontSize: 22, fontWeight: 700 }}>
-              {calledCount} / {deck.length || 0}
+                <button
+                  onClick={() => openConfirm("reset")}
+                  disabled={!state}
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "1px solid #b91c1c",
+                    background: "white",
+                    color: "#b91c1c",
+                    cursor: !state ? "not-allowed" : "pointer",
+                    minWidth: 160,
+                    fontWeight: 800,
+                  }}
+                >
+                  Reset game
+                </button>
+              </div>
             </div>
           </div>
-          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Remaining</div>
-            <div style={{ fontSize: 22, fontWeight: 700 }}>{remainingCount}</div>
+
+          <div style={{ marginTop: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ fontWeight: 800 }}>
+                Caller pool (one per line). Source key: <b>{POOL_KEY}</b>
+              </div>
+
+              <button
+                onClick={savePoolEdits}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #111827",
+                  background: "white",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                }}
+              >
+                Save pool and reshuffle
+              </button>
+            </div>
+
+            <textarea
+              value={poolText}
+              onChange={(e) => setPoolText(e.target.value)}
+              rows={10}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                borderRadius: 10,
+                border: "1px solid #d1d5db",
+                padding: 12,
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                fontSize: 14,
+              }}
+            />
+
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+              Unique items: <b>{uniq(poolLines).length}</b>
+            </div>
           </div>
+
+          {error ? (
+            <div style={{ color: "#b91c1c", fontWeight: 700 }}>{error}</div>
+          ) : null}
+          {info ? <div style={{ color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Draw history</h2>
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: 16,
+        }}
+      >
+        <div style={{ fontWeight: 900, marginBottom: 10, fontSize: 18 }}>
+          Called items (latest first)
+        </div>
 
-        {!draws.length ? (
-          <div style={{ marginTop: 10, color: "#6b7280" }}>
-            No draws yet. Start a game, then press Next draw.
-          </div>
+        {calledLatest.length === 0 ? (
+          <div style={{ color: "#6b7280" }}>No calls yet.</div>
         ) : (
-          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-            {draws.map((batch, idx) => (
-              <div key={idx} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>Day {idx + 1}</div>
-                <div style={{ lineHeight: 1.6 }}>
-                  {batch.map((item) => (
-                    <div key={item}>{item}</div>
-                  ))}
-                </div>
-              </div>
+          <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+            {calledLatest.map((item, idx) => (
+              <li key={`${item}-${idx}`}>{item}</li>
             ))}
-          </div>
+          </ol>
         )}
       </div>
 
-      <div style={{ marginTop: 12, fontSize: 12, color: "#6b7280" }}>
-        This page persists state, so pull-to-refresh restores the current game.
-      </div>
+      <Modal
+        open={confirmOpen}
+        title={confirmTitle}
+        body={confirmBody}
+        confirmText={
+          confirmMode === "next"
+            ? "Draw now"
+            : confirmMode === "reset"
+            ? "Reset"
+            : "Undo"
+        }
+        cancelText="Cancel"
+        danger={confirmDanger}
+        busy={busy}
+        onConfirm={handleConfirm}
+        onCancel={closeConfirm}
+      />
     </div>
   );
 }
