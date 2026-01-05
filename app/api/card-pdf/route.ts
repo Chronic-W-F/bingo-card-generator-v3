@@ -2,7 +2,6 @@
 import { NextResponse } from "next/server";
 import { pdf } from "@react-pdf/renderer";
 import React from "react";
-
 import BingoPackPdf from "@/pdf/BingoPackPdf";
 
 export const runtime = "nodejs";
@@ -22,7 +21,7 @@ type Body = {
 function toAbsoluteUrl(reqUrl: string, maybeRelative?: string) {
   if (!maybeRelative) return undefined;
 
-  // Already absolute?
+  // already absolute?
   try {
     const u = new URL(maybeRelative);
     return u.toString();
@@ -83,17 +82,18 @@ export async function POST(req: Request) {
 
     let bytes: Uint8Array;
 
-    // Buffer is a Uint8Array subclass in Node
     if (result instanceof Uint8Array) {
       bytes = result;
     } else if (result && typeof result.getReader === "function") {
       bytes = await readStreamToUint8Array(result as ReadableStream<Uint8Array>);
     } else {
-      // last-resort: try to wrap arrayBuffer-like
       bytes = new Uint8Array(result);
     }
 
-    return new NextResponse(bytes, {
+    // ✅ Key fix: Buffer body (and cast) avoids TS BodyInit/ArrayBufferLike mismatch
+    const out = Buffer.from(bytes);
+
+    return new NextResponse(out as any, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="bingo-card-${body.card.id}.pdf"`,
