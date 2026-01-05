@@ -2,8 +2,9 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-const POOL_KEY = "grower-bingo:pool:v1"; // Option B pool sync
+const POOL_KEY = "grower-bingo:pool:v1"; // Option B pool sync (generator -> caller)
 const CALLER_STATE_KEY = "grower-bingo:callerState:v1";
+const LAST_PACK_ID_KEY = "grower-bingo:lastPackId:v1";
 
 type CallerState = {
   version: 1;
@@ -11,12 +12,15 @@ type CallerState = {
   updatedAt: number;
 
   // Pool data
-  poolLines: string[]; // source pool (what Caller is drawing from)
+  poolLines: string[]; // current pool (unique)
   remaining: string[]; // remaining items to draw (shuffled)
   called: string[]; // called items in order
 
   // Settings
   drawCount: number; // how many to draw per click
+
+  // UX
+  lastSavedAt?: number; // when user clicked "Save pool and reshuffle"
 };
 
 function normalizeLines(text: string): string[] {
@@ -61,6 +65,14 @@ function readTextFromLocalStorage(key: string): string | null {
   }
 }
 
+function writeTextToLocalStorage(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
 function writeJsonToLocalStorage(key: string, value: any) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -91,7 +103,17 @@ function makeFreshState(poolLines: string[], drawCount = 10): CallerState {
     remaining: shuffled,
     called: [],
     drawCount: clampInt(drawCount, 1, 25),
+    lastSavedAt: undefined,
   };
+}
+
+function formatTime(ts?: number) {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return String(ts);
+  }
 }
 
 function Modal({
@@ -206,55 +228,67 @@ export default function CallerPage() {
   const [error, setError] = useState<string>("");
   const [info, setInfo] = useState<string>("");
 
-  // Nice confirmation modal
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmMode, setConfirmMode] = useState<
-    "next" | "reset" | "undo" | null
-  >(null);
-
+  const [confirmMode, setConfirmMode] = useState<"next" | "reset" | "undo" | null>(
+    null
+  );
   const [busy, setBusy] = useState(false);
 
   const poolLines = useMemo(() => normalizeLines(poolText), [poolText]);
 
-  // Initial load: restore state if exists, else load pool from Option B key
-  useEffect(() => {
-    const restored = readJsonFromLocalStorage<CallerState>(CALLER_STATE_KEY);
-    if (restored?.version === 1 && Array.isArray(restored.remaining)) {
-      setState(restored);
-      setPoolText(restored.poolLines.join("\n"));
-      return;
-    }
-
-    const rawPool = readTextFromLocalStorage(POOL_KEY) || "";
-    const lines = normalizeLines(rawPool);
-
-    if (lines.length) {
-      const fresh = makeFreshState(lines, 10);
-      setState(fresh);
-      setPoolText(lines.join("\n"));
-      writeJsonToLocalStorage(CALLER_STATE_KEY, fresh);
-      setInfo("Caller loaded pool from generator (Option B).");
-      return;
-    }
-
-    // Fallback empty
-    setPoolText("");
-    setState(makeFreshState([], 10));
+  const lastPackId = useMemo(() => {
+    return readTextFromLocalStorage(LAST_PACK_ID_KEY) || "";
   }, []);
 
-  // Persist any state change
+  // Load logic (priority):
+  // 1) Always try POOL_KEY from generator first (most current weekly pool)
+  // 2) If missing, try restoring CALLER_STATE_KEY
+  // 3) If both missing, start empty
+  useEffect(() => {
+    const rawPool = readTextFromLocalStorage(POOL_KEY) || "";
+    const fromPoolKey = normalizeLines(rawPool);
+
+    if (fromPoolKey.length) {
+      const fresh = makeFreshState(fromPoolKey, 10);
+      setState(fresh);
+      setPoolText(fromPoolKey.join("\n"));
+      writeJsonToLocalStorage(CALLER_STATE_KEY, fresh);
+      setInfo(`Loaded pool from ${POOL_KEY}.`);
+      return;
+    }
+
+    const restored = readJsonFromLocalStorage<CallerState>(CALLER_STATE_KEY);
+    if (
+      restored?.version === 1 &&
+      Array.isArray(restored.remaining) &&
+      Array.isArray(restored.poolLines)
+    ) {
+      setState(restored);
+      setPoolText(restored.poolLines.join("\n"));
+      setInfo(`Restored caller state from ${CALLER_STATE_KEY}.`);
+      return;
+    }
+
+    const empty = makeFreshState([], 10);
+    setState(empty);
+    setPoolText("");
+    writeJsonToLocalStorage(CALLER_STATE_KEY, empty);
+  }, []);
+
+  // Persist state on change
   useEffect(() => {
     if (!state) return;
     writeJsonToLocalStorage(CALLER_STATE_KEY, state);
   }, [state]);
 
-  function applyPoolToState(newPoolLines: string[]) {
+  function applyPoolToState(newPoolLines: string[], setSavedAt?: boolean) {
     const currentDrawCount = state?.drawCount ?? 10;
     const fresh = makeFreshState(newPoolLines, currentDrawCount);
+    if (setSavedAt) fresh.lastSavedAt = Date.now();
     setState(fresh);
     setError("");
     setInfo(
-      `Pool loaded. ${fresh.poolLines.length} unique items. Shuffled and ready.`
+      `Saved + reshuffled. Pool stored in ${POOL_KEY}. State stored in ${CALLER_STATE_KEY}.`
     );
   }
 
@@ -277,6 +311,7 @@ export default function CallerPage() {
     if (confirmMode === "reset") {
       setBusy(true);
       const fresh = makeFreshState(state.poolLines, state.drawCount);
+      fresh.lastSavedAt = state.lastSavedAt;
       setState(fresh);
       setBusy(false);
       closeConfirm();
@@ -285,8 +320,6 @@ export default function CallerPage() {
     }
 
     if (confirmMode === "undo") {
-      // Undo last batch draw: we do this by restoring items from the end of called
-      // We store no explicit batches, so we undo the last drawCount items (or whatever exists).
       setBusy(true);
       const k = clampInt(state.drawCount, 1, 25);
       const undoCount = Math.min(k, state.called.length);
@@ -296,6 +329,7 @@ export default function CallerPage() {
         setInfo("Nothing to undo.");
         return;
       }
+
       const back = state.called.slice(state.called.length - undoCount);
       const remaining = back.concat(state.remaining);
       const called = state.called.slice(0, state.called.length - undoCount);
@@ -306,6 +340,7 @@ export default function CallerPage() {
         remaining,
         called,
       };
+
       setState(next);
       setBusy(false);
       closeConfirm();
@@ -345,25 +380,37 @@ export default function CallerPage() {
     }
   }
 
-  function savePoolEdits() {
+  function savePoolAndReshuffle() {
     const lines = uniq(poolLines);
     if (lines.length === 0) {
       setError("Pool is empty. Paste items (one per line).");
       return;
     }
-    // Keep Option B in sync
-    try {
-      window.localStorage.setItem(POOL_KEY, lines.join("\n"));
-    } catch {
-      // ignore
-    }
-    applyPoolToState(lines);
+
+    // This is the “recall” location:
+    // - POOL_KEY is what Generator and Caller share
+    // - CALLER_STATE_KEY is the in-progress game state
+    writeTextToLocalStorage(POOL_KEY, lines.join("\n"));
+
+    applyPoolToState(lines, true);
   }
 
   function setDrawCount(raw: string) {
     const n = clampInt(Number.parseInt(raw, 10), 1, 25);
     if (!state) return;
     setState({ ...state, drawCount: n, updatedAt: Date.now() });
+  }
+
+  function openWinners() {
+    const packId = readTextFromLocalStorage(LAST_PACK_ID_KEY) || "";
+    if (!packId) {
+      setError(
+        `No packId found. Generate a pack first (Generator sets ${LAST_PACK_ID_KEY}).`
+      );
+      return;
+    }
+    const url = `/winners/${encodeURIComponent(packId)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   const calledLatest = state?.called.slice().reverse() ?? [];
@@ -414,13 +461,67 @@ export default function CallerPage() {
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <h1 style={{ marginTop: 0, fontSize: 30 }}>Caller</h1>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <h1 style={{ marginTop: 0, fontSize: 30 }}>Caller</h1>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <a
+            href="/"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              textDecoration: "none",
+              color: "#111827",
+              display: "inline-block",
+              fontWeight: 700,
+            }}
+          >
+            Back to Generator
+          </a>
+
+          <button
+            onClick={openWinners}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              color: "#111827",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            Open Winners
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 6, color: "#6b7280", fontSize: 12 }}>
+        Pool key: <b>{POOL_KEY}</b> | Caller state: <b>{CALLER_STATE_KEY}</b>
+        {lastPackId ? (
+          <>
+            {" "}
+            | Last packId: <b>{lastPackId}</b>
+          </>
+        ) : null}
+      </div>
 
       <div
         style={{
           border: "1px solid #e5e7eb",
           borderRadius: 12,
           padding: 16,
+          marginTop: 12,
           marginBottom: 16,
         }}
       >
@@ -524,11 +625,12 @@ export default function CallerPage() {
               }}
             >
               <div style={{ fontWeight: 800 }}>
-                Caller pool (one per line). Source key: <b>{POOL_KEY}</b>
+                Caller pool (one per line). Items:{" "}
+                <b>{uniq(poolLines).length}</b>
               </div>
 
               <button
-                onClick={savePoolEdits}
+                onClick={savePoolAndReshuffle}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 10,
@@ -559,7 +661,7 @@ export default function CallerPage() {
             />
 
             <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              Unique items: <b>{uniq(poolLines).length}</b>
+              Last saved: <b>{formatTime(state?.lastSavedAt) || "Never"}</b>
             </div>
           </div>
 
@@ -611,4 +713,4 @@ export default function CallerPage() {
       />
     </div>
   );
-}
+                    }
