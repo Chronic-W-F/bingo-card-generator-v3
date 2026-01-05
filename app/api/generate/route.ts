@@ -5,6 +5,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import BingoPackPdf from "@/pdf/BingoPackPdf";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getDb } from "@/lib/firebaseAdmin";
 
 export const runtime = "nodejs";
 
@@ -12,17 +13,15 @@ type Body = {
   title?: string;
   qty?: number;
   quantity?: number;
-  items?: string[]; // master pool lines
-  gridSize?: 3 | 4 | 5; // optional, default 5
+  items?: string[];
+  gridSize?: 3 | 4 | 5;
 
   sponsorName?: string;
 
-  // Generator sends these
-  bannerImageUrl?: string; // e.g. "/banners/current.png"
-  sponsorLogoUrl?: string; // e.g. "https://..." (not used yet in PDF)
+  bannerImageUrl?: string; // default "/banners/current.png"
+  sponsorLogoUrl?: string; // not used yet
 };
 
-// Reads a file under /public and returns a data URI string (best for react-pdf Image)
 async function readPublicAsDataUri(publicPath: string): Promise<string | null> {
   try {
     const clean = publicPath.startsWith("/") ? publicPath.slice(1) : publicPath;
@@ -49,14 +48,11 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
 
-    const title = (body.title ?? "Harvest Heroes Bingo").toString();
+    const title = (body.title ?? "Lights Out Bingo").toString();
 
     const qtyRaw =
       Number.isFinite(body.qty) ? Number(body.qty) : Number(body.quantity);
-    const safeQty = Math.max(
-      1,
-      Math.min(500, Number.isFinite(qtyRaw) ? qtyRaw : 25)
-    );
+    const safeQty = Math.max(1, Math.min(500, Number.isFinite(qtyRaw) ? qtyRaw : 25));
 
     const gridSize = (body.gridSize ?? 5) as 3 | 4 | 5;
 
@@ -73,38 +69,33 @@ export async function POST(req: Request) {
       masterPool: items,
       qty: safeQty,
       gridSize,
+      title,
+      sponsorName: body.sponsorName,
     });
 
     // Stable ids for storage + URLs
+    // NOTE: lib/bingo.ts already generates packId/createdAt, but we keep your API behavior stable
     const packId = `pack_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
     const createdAt = Date.now();
 
     // --- Banner restore ---
-    // Default workflow: replace public/banners/current.png weekly
     const bannerUrl = (body.bannerImageUrl ?? "/banners/current.png").toString();
 
-    // Convert /public paths to data URI for react-pdf reliability
     let bannerDataOrUrl: string | undefined = undefined;
-
     if (bannerUrl.startsWith("/")) {
       bannerDataOrUrl = (await readPublicAsDataUri(bannerUrl)) ?? undefined;
     } else if (bannerUrl.startsWith("https://") || bannerUrl.startsWith("http://")) {
       bannerDataOrUrl = bannerUrl;
     }
 
-    // IMPORTANT:
-    // - app/page.tsx expects pdfBase64 to be RAW base64 (no data: prefix)
+    // IMPORTANT: page.tsx expects RAW base64 (no "data:application/pdf;base64,")
     const pdfBuffer = await renderToBuffer(
       BingoPackPdf({
         title,
         sponsorName: body.sponsorName,
-
-        // ✅ Correct prop name for the updated PDF component:
+        // Support both prop names (old/new PDF variants)
         bannerImageUrl: bannerDataOrUrl,
-
-        // ✅ Back-compat fallback (PDF also accepts this):
         sponsorImage: bannerDataOrUrl,
-
         cards: pack.cards,
         gridSize,
       }) as any
@@ -112,11 +103,12 @@ export async function POST(req: Request) {
 
     const pdfBase64 = pdfBuffer.toString("base64");
 
-    // Optional CSV roster
+    // CSV roster
     const csvLines = ["cardId"];
     for (const c of pack.cards) csvLines.push(c.id);
     const csv = csvLines.join("\n");
 
+    // Shape used by the client + localStorage
     const cardsPack = {
       packId,
       createdAt,
@@ -125,14 +117,58 @@ export async function POST(req: Request) {
       cards: pack.cards,
       weeklyPool: pack.weeklyPool,
       usedItems: pack.usedItems,
+      meta: pack.meta,
+      bannerImageUrl: bannerUrl,
     };
+
+    // --- Firestore write (server-only, no auth) ---
+    // Collections:
+    // packs/{packId}
+    // packs/{packId}/cards/{cardId}
+    const db = getDb();
+
+    const packRef = db.collection("packs").doc(packId);
+
+    await packRef.set(
+      {
+        packId,
+        createdAt,
+        title,
+        sponsorName: body.sponsorName ?? null,
+        gridSize,
+        qty: safeQty,
+        weeklyPool: pack.weeklyPool,
+        usedItems: pack.usedItems,
+        meta: pack.meta,
+        bannerImageUrl: bannerUrl,
+        sponsorLogoUrl: body.sponsorLogoUrl ?? null,
+        // Helpful later
+        cardCount: pack.cards.length,
+      },
+      { merge: true }
+    );
+
+    // Write cards in a batch
+    const batch = db.batch();
+    for (const c of pack.cards) {
+      const cRef = packRef.collection("cards").doc(c.id);
+      batch.set(
+        cRef,
+        {
+          cardId: c.id,
+          grid: c.grid,
+          createdAt,
+        },
+        { merge: true }
+      );
+    }
+    await batch.commit();
 
     const requestKey = packId;
 
     return NextResponse.json({
       requestKey,
       createdAt,
-
       packId,
       title,
 
