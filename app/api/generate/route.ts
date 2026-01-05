@@ -1,189 +1,209 @@
 // app/api/generate/route.ts
 import { NextResponse } from "next/server";
-import { createBingoPackFromMasterPool } from "@/lib/bingo";
 import { renderToBuffer } from "@react-pdf/renderer";
+import admin from "firebase-admin";
+
 import BingoPackPdf from "@/pdf/BingoPackPdf";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { getDb } from "@/lib/firebaseAdmin";
+import { createBingoPack, type BingoPack } from "@/lib/bingo";
 
 export const runtime = "nodejs";
 
-type Body = {
-  title?: string;
-  qty?: number;
-  quantity?: number;
-  items?: string[];
-  gridSize?: 3 | 4 | 5;
+// ---------- Firebase Admin (safe init) ----------
+function getFirebaseAdminApp() {
+  if (admin.apps.length) return admin.app();
 
-  sponsorName?: string;
-
-  bannerImageUrl?: string; // default "/banners/current.png"
-  sponsorLogoUrl?: string; // not used yet
-};
-
-async function readPublicAsDataUri(publicPath: string): Promise<string | null> {
-  try {
-    const clean = publicPath.startsWith("/") ? publicPath.slice(1) : publicPath;
-    const abs = path.join(process.cwd(), "public", clean);
-    const buf = await fs.readFile(abs);
-
-    const ext = path.extname(clean).toLowerCase();
-    const mime =
-      ext === ".png"
-        ? "image/png"
-        : ext === ".jpg" || ext === ".jpeg"
-          ? "image/jpeg"
-          : ext === ".webp"
-            ? "image/webp"
-            : "application/octet-stream";
-
-    return `data:${mime};base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
+  const json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!json) {
+    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON env var.");
   }
+
+  let creds: admin.ServiceAccount;
+  try {
+    creds = JSON.parse(json);
+  } catch {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON.");
+  }
+
+  return admin.initializeApp({
+    credential: admin.credential.cert(creds),
+    // Optional. If you set FIREBASE_PROJECT_ID, we'll use it.
+    projectId: process.env.FIREBASE_PROJECT_ID || creds.project_id,
+  });
 }
 
+// ---------- Helpers ----------
+function normalizeLines(text: string): string[] {
+  return text
+    .split(/\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function asInt(value: unknown, fallback: number) {
+  const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function safeString(v: unknown) {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function toBase64(data: Buffer) {
+  return data.toString("base64");
+}
+
+// ---------- POST /api/generate ----------
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Body;
+    const body = await req.json().catch(() => ({}));
 
-    const title = (body.title ?? "Lights Out Bingo").toString();
+    // Inputs (match your form)
+    const title = safeString(body.title) || "Harvest Heroes Bingo";
+    const sponsorName = safeString(body.sponsorName) || "Joe’s Grows";
 
-    const qtyRaw =
-      Number.isFinite(body.qty) ? Number(body.qty) : Number(body.quantity);
-    const safeQty = Math.max(1, Math.min(500, Number.isFinite(qtyRaw) ? qtyRaw : 25));
+    // NOTE: Keep these names aligned with your frontend.
+    // Your PDF props should be bannerImageUrl + sponsorLogoUrl (strings).
+    const bannerImageUrl = safeString(body.bannerImageUrl || body.bannerImage || "");
+    const sponsorLogoUrl = safeString(body.sponsorLogoUrl || body.sponsorLogo || "");
 
-    const gridSize = (body.gridSize ?? 5) as 3 | 4 | 5;
+    // Pool + qty
+    const itemsText =
+      safeString(body.itemsText) ||
+      safeString(body.items) ||
+      safeString(body.squarePool) ||
+      "";
+    const items = normalizeLines(itemsText);
 
-    const items = Array.isArray(body.items) ? body.items : [];
-    if (gridSize === 5 && items.length < 24) {
+    const qty = asInt(body.qty ?? body.quantity, 1);
+    const quantity = Math.min(Math.max(qty, 1), 500);
+
+    // Grid size (default 5x5)
+    const gridSize = Math.min(Math.max(asInt(body.gridSize, 5), 3), 5);
+
+    if (items.length < (gridSize * gridSize - 1)) {
       return NextResponse.json(
-        { error: `Need at least 24 items for 5x5. Got ${items.length}.` },
+        {
+          ok: false,
+          error: `Need at least ${gridSize * gridSize - 1} items for a ${gridSize}x${gridSize} card (center is free). You provided ${items.length}.`,
+        },
         { status: 400 }
       );
     }
 
-    // Generate pack (cards + weeklyPool + usedItems)
-    const pack = createBingoPackFromMasterPool({
-      masterPool: items,
-      qty: safeQty,
-      gridSize,
+    // Create the pack
+    const pack: BingoPack = createBingoPack(items, quantity, {
       title,
-      sponsorName: body.sponsorName,
+      sponsorName,
+      gridSize,
     });
 
-    // Stable ids for storage + URLs
-    // NOTE: lib/bingo.ts already generates packId/createdAt, but we keep your API behavior stable
-    const packId = `pack_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
     const createdAt = Date.now();
+    const packId = pack.packId;
 
-    // --- Banner restore ---
-    const bannerUrl = (body.bannerImageUrl ?? "/banners/current.png").toString();
-
-    let bannerDataOrUrl: string | undefined = undefined;
-    if (bannerUrl.startsWith("/")) {
-      bannerDataOrUrl = (await readPublicAsDataUri(bannerUrl)) ?? undefined;
-    } else if (bannerUrl.startsWith("https://") || bannerUrl.startsWith("http://")) {
-      bannerDataOrUrl = bannerUrl;
-    }
-
-    // IMPORTANT: page.tsx expects RAW base64 (no "data:application/pdf;base64,")
+    // Render PDF
     const pdfBuffer = await renderToBuffer(
-      BingoPackPdf({
+      // IMPORTANT: prop names below must match your pdf/BingoPackPdf.tsx Props
+      // Use bannerImageUrl + sponsorLogoUrl (strings).
+      // If your PDF component expects different names, change here.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (BingoPackPdf as any)({
         title,
-        sponsorName: body.sponsorName,
-        // Support both prop names (old/new PDF variants)
-        bannerImageUrl: bannerDataOrUrl,
-        sponsorImage: bannerDataOrUrl,
+        sponsorName,
+        bannerImageUrl,
+        sponsorLogoUrl,
         cards: pack.cards,
         gridSize,
-      }) as any
+      })
     );
 
-    const pdfBase64 = pdfBuffer.toString("base64");
-
-    // CSV roster
-    const csvLines = ["cardId"];
+    // Build CSV roster (CardId per card)
+    const csvLines = ["card_id"];
     for (const c of pack.cards) csvLines.push(c.id);
     const csv = csvLines.join("\n");
 
-    // Shape used by the client + localStorage
-    const cardsPack = {
-      packId,
-      createdAt,
-      title,
-      sponsorName: body.sponsorName,
-      cards: pack.cards,
-      weeklyPool: pack.weeklyPool,
-      usedItems: pack.usedItems,
-      meta: pack.meta,
-      bannerImageUrl: bannerUrl,
-    };
-
-    // --- Firestore write (server-only, no auth) ---
-    // Collections:
-    // packs/{packId}
-    // packs/{packId}/cards/{cardId}
-    const db = getDb();
-
-    const packRef = db.collection("packs").doc(packId);
-
-    await packRef.set(
+    // Build JSON export (for your Download cards.json button)
+    const cardsJson = JSON.stringify(
       {
         packId,
         createdAt,
         title,
-        sponsorName: body.sponsorName ?? null,
+        sponsorName,
         gridSize,
-        qty: safeQty,
+        bannerImageUrl,
+        sponsorLogoUrl,
+        cards: pack.cards,
         weeklyPool: pack.weeklyPool,
         usedItems: pack.usedItems,
-        meta: pack.meta,
-        bannerImageUrl: bannerUrl,
-        sponsorLogoUrl: body.sponsorLogoUrl ?? null,
-        // Helpful later
-        cardCount: pack.cards.length,
+      },
+      null,
+      2
+    );
+
+    // Persist to Firestore (Option B / future-proof)
+    // Fix for your error: Firestore cannot store nested arrays like string[][].
+    // We store gridFlat (string[]) + gridSize instead.
+    const app = getFirebaseAdminApp();
+    const db = app.firestore();
+
+    const packRef = db.collection("packs").doc(packId);
+
+    const batch = db.batch();
+
+    // Pack doc
+    batch.set(
+      packRef,
+      {
+        packId,
+        createdAt,
+        title,
+        sponsorName,
+        gridSize,
+        bannerImageUrl,
+        sponsorLogoUrl,
+        quantity,
+        weeklyPool: pack.weeklyPool,
+        usedItems: pack.usedItems,
       },
       { merge: true }
     );
 
-    // Write cards in a batch
-    const batch = db.batch();
+    // Cards subcollection
     for (const c of pack.cards) {
       const cRef = packRef.collection("cards").doc(c.id);
       batch.set(
         cRef,
         {
           cardId: c.id,
-          grid: c.grid,
           createdAt,
+          gridSize,
+          gridFlat: c.grid.flat(), // ✅ Firestore-safe (no nested arrays)
         },
         { merge: true }
       );
     }
+
     await batch.commit();
 
-    const requestKey = packId;
-
     return NextResponse.json({
-      requestKey,
-      createdAt,
-      packId,
-      title,
-
-      pdfBase64,
-      csv,
-      usedItems: pack.usedItems,
-      cardsPack,
-
-      weeklyPool: pack.weeklyPool,
-      cards: pack.cards,
+      ok: true,
+      data: {
+        packId,
+        createdAt,
+        title,
+        sponsorName,
+        gridSize,
+        bannerImageUrl,
+        sponsorLogoUrl,
+        qty: quantity,
+        weeklyPool: pack.weeklyPool,
+        usedItems: pack.usedItems,
+        pdfBase64: toBase64(Buffer.from(pdfBuffer)),
+        csv,
+        cardsJson,
+      },
     });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Generate failed." },
-      { status: 500 }
-    );
+  } catch (err: any) {
+    const message = err?.message || "Unknown error";
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
