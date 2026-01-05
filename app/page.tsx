@@ -161,7 +161,22 @@ function downloadBase64Pdf(filename: string, base64: string) {
   URL.revokeObjectURL(url);
 }
 
-function downloadTextFile(filename: string, text: string, mime = "text/plain;charset=utf-8") {
+function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadTextFile(
+  filename: string,
+  text: string,
+  mime = "text/plain;charset=utf-8"
+) {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -194,9 +209,13 @@ export default function Page() {
   const [error, setError] = useState<string>("");
   const [info, setInfo] = useState<string>("");
 
+  // Single-card PDF selector
+  const [singleCardId, setSingleCardId] = useState<string>("");
+
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
 
+  // Restore last pack so Back navigation doesn't gray out buttons
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(LAST_GENERATED_PACK_KEY);
@@ -204,12 +223,16 @@ export default function Page() {
       const restored = JSON.parse(raw) as GeneratedPack;
       if (restored?.pdfBase64 && restored?.requestKey) {
         setPack(restored);
+
+        const firstId = restored?.cardsPack?.cards?.[0]?.id;
+        if (firstId) setSingleCardId(firstId);
       }
     } catch {
       // ignore
     }
   }, []);
 
+  // Keep the shared pool synced for Caller reload
   useEffect(() => {
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
@@ -217,6 +240,12 @@ export default function Page() {
       // ignore
     }
   }, [poolLines]);
+
+  // When pack changes, set default single card id to first card
+  useEffect(() => {
+    const first = pack?.cardsPack?.cards?.[0]?.id;
+    if (first) setSingleCardId(first);
+  }, [pack?.cardsPack?.packId]);
 
   function loadDefaults() {
     setItemsText(DEFAULT_ITEMS);
@@ -243,6 +272,7 @@ export default function Page() {
       return;
     }
 
+    // Ensure caller pool is synced before generating
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
     } catch {
@@ -264,7 +294,6 @@ export default function Page() {
         }),
       });
 
-      // IMPORTANT: API must return JSON (this fixes the %PDF error)
       const data = await res.json();
 
       if (!res.ok) {
@@ -288,12 +317,17 @@ export default function Page() {
 
       setPack(nextPack);
 
+      // Persist generator state so Back button doesn't gray out everything
       try {
-        window.localStorage.setItem(LAST_GENERATED_PACK_KEY, JSON.stringify(nextPack));
+        window.localStorage.setItem(
+          LAST_GENERATED_PACK_KEY,
+          JSON.stringify(nextPack)
+        );
       } catch {
         // ignore
       }
 
+      // Save last pack id and store a full pack object Caller can use
       if (data?.cardsPack?.packId) {
         try {
           const packId = data.cardsPack.packId;
@@ -303,16 +337,22 @@ export default function Page() {
           const storedPack = {
             ...data.cardsPack,
             weeklyPool:
-              Array.isArray(data.usedItems) && data.usedItems.length ? data.usedItems : poolLines,
+              Array.isArray(data.usedItems) && data.usedItems.length
+                ? data.usedItems
+                : poolLines,
             usedItems: Array.isArray(data.usedItems) ? data.usedItems : [],
           };
 
-          window.localStorage.setItem(`grower-bingo:pack:${packId}`, JSON.stringify(storedPack));
+          window.localStorage.setItem(
+            `grower-bingo:pack:${packId}`,
+            JSON.stringify(storedPack)
+          );
         } catch {
           // ignore
         }
       }
 
+      // Option B: if API returns usedItems, sync those to Caller pool
       if (Array.isArray(data.usedItems) && data.usedItems.length) {
         try {
           window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
@@ -321,12 +361,15 @@ export default function Page() {
         }
       }
 
+      // Auto download PDF
       const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
 
       setTimeout(() => {
         try {
           downloadBase64Pdf(filename, data.pdfBase64);
-          setInfo("PDF download triggered. If nothing happened, use Download PDF below.");
+          setInfo(
+            "PDF download triggered. If nothing happened, use the manual Download PDF button below."
+          );
         } catch (e: any) {
           setError(e?.message || "Could not trigger PDF download.");
         }
@@ -368,6 +411,51 @@ export default function Page() {
     const url = `/winners/${encodeURIComponent(packId)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   }
+
+  async function downloadSingleCardPdf() {
+    setError("");
+    setInfo("");
+
+    const cards = pack?.cardsPack?.cards || [];
+    if (!cards.length) {
+      setError("Generate a pack first (need cardsPack).");
+      return;
+    }
+
+    const chosen = cards.find((c) => c.id === singleCardId) || cards[0];
+    if (!chosen) {
+      setError("No card found.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/card-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          sponsorName,
+          bannerImageUrl,
+          card: chosen,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        setError(text || "Single card PDF failed.");
+        return;
+      }
+
+      const blob = await res.blob();
+      const filename = `${safeFileName(title)}-${chosen.id}.pdf`;
+      downloadBlob(filename, blob);
+      setInfo(`Downloaded single card PDF for ${chosen.id}.`);
+    } catch (e: any) {
+      setError(e?.message || "Single card PDF failed.");
+    }
+  }
+
+  const cardCount = pack?.cardsPack?.cards?.length || 0;
 
   return (
     <div
@@ -440,8 +528,8 @@ export default function Page() {
               }}
             />
             <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep this value
-              unchanged.
+              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep
+              this value unchanged.
             </div>
           </div>
 
@@ -602,7 +690,9 @@ export default function Page() {
                 background:
                   !pack?.cardsPack?.packId && !pack?.requestKey ? "#9ca3af" : "white",
                 cursor:
-                  !pack?.cardsPack?.packId && !pack?.requestKey ? "not-allowed" : "pointer",
+                  !pack?.cardsPack?.packId && !pack?.requestKey
+                    ? "not-allowed"
+                    : "pointer",
                 minWidth: 220,
               }}
             >
@@ -625,12 +715,71 @@ export default function Page() {
             </a>
           </div>
 
+          {/* Single-card PDF section */}
+          <div
+            style={{
+              marginTop: 14,
+              paddingTop: 14,
+              borderTop: "1px solid #e5e7eb",
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>
+              Single card PDF
+            </div>
+
+            <div style={{ fontSize: 13, color: "#374151", marginBottom: 10 }}>
+              Generate a pack first. Then select a Card ID and download just that card as a 1-page PDF.
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                value={singleCardId}
+                onChange={(e) => setSingleCardId(e.target.value)}
+                disabled={!cardCount}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #d1d5db",
+                  minWidth: 280,
+                  background: !cardCount ? "#f3f4f6" : "white",
+                }}
+              >
+                {!cardCount ? (
+                  <option value="">Generate a pack first</option>
+                ) : (
+                  pack?.cardsPack?.cards.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.id}
+                    </option>
+                  ))
+                )}
+              </select>
+
+              <button
+                onClick={downloadSingleCardPdf}
+                disabled={!cardCount}
+                style={{
+                  padding: "12px 16px",
+                  borderRadius: 12,
+                  border: "1px solid #111827",
+                  background: !cardCount ? "#9ca3af" : "white",
+                  cursor: !cardCount ? "not-allowed" : "pointer",
+                  minWidth: 220,
+                }}
+              >
+                Download selected card PDF
+              </button>
+            </div>
+          </div>
+
           {error ? (
-            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div>
+            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>
+              {error}
+            </div>
           ) : null}
           {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
     </div>
   );
-}
+            }
