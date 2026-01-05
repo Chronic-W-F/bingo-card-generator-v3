@@ -2,416 +2,268 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { CENTER_LABEL } from "@/lib/bingo";
-import { computeExpectedWinners } from "@/lib/packTypes";
+
+const CALLER_STATE_KEY = "grower-bingo:callerState:v1";
+
+function packCallerKey(packId: string) {
+  return `grower-bingo:callerState:${packId}`;
+}
+
+function packStorageKey(packId: string) {
+  return `grower-bingo:pack:${packId}`;
+}
+
+const CENTER_LABEL = "Joe’s Grows";
 
 type BingoCard = {
   id: string;
   grid: string[][];
 };
 
-type CardsPack = {
+type StoredPack = {
   packId: string;
   createdAt: number;
   title?: string;
   sponsorName?: string;
   cards: BingoCard[];
-};
-
-type ClaimInfo = {
-  claimed: boolean;
-  claimedBy?: string;
-  claimedAt?: number;
-};
-
-type DrawDay = {
-  day: number;
-  calls: string[];
+  weeklyPool?: string[];
+  usedItems?: string[];
 };
 
 type CallerState = {
   packId: string;
-  poolText: string;
-  deckSize: number;
-  drawSize: number;
-  deckSizeInput: string;
-  drawSizeInput: string;
-  round: number;
-  deck: string[];
+  savedAt: number | null;
+  pool: string[];
+  remaining: string[];
   called: string[];
-  draws: string[][];
+  lastBatch: string[];
 };
 
-const CALLER_STATE_KEY = "grower-bingo:caller:v2";
-
-function packStorageKey(packId: string) {
-  return `grower-bingo:pack:${packId}`;
-}
-
-function drawsStorageKey(packId: string) {
-  return `grower-bingo:draws:${packId}`;
-}
-
-function claimsStorageKey(packId: string) {
-  return `grower-bingo:claims:${packId}`;
-}
-
-function loadJson<T>(key: string, fallback: T): T {
+function safeJsonParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
-    return fallback;
+    return null;
   }
 }
 
-function loadText(key: string, fallback = ""): string {
-  try {
-    return window.localStorage.getItem(key) ?? fallback;
-  } catch {
-    return fallback;
-  }
+// Normalize for matching
+function norm(s: string) {
+  return (s || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[’‘]/g, "'")
+    .toLowerCase();
 }
 
-function saveText(key: string, value: string) {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // ignore
-  }
-}
-
-function parseDrawText(drawText: string): DrawDay[] {
-  const lines = drawText.split("\n").map((l) => l.trimEnd());
-
-  const days: DrawDay[] = [];
-  let currentDay: number | null = null;
-  let currentCalls: string[] = [];
-
-  const push = () => {
-    if (currentDay == null) return;
-    days.push({
-      day: currentDay,
-      calls: currentCalls.map((s) => s.trim()).filter(Boolean),
-    });
-  };
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    const m = line.match(/^day\s*(\d+)\s*:?$/i) || line.match(/^(\d+)\s*:?$/i);
-    if (m) {
-      push();
-      currentDay = Number(m[1]);
-      currentCalls = [];
-      continue;
-    }
-
-    currentCalls.push(line);
-  }
-
-  push();
-  days.sort((a, b) => a.day - b.day);
-  return days;
-}
-
-function buildDrawTextFromCallerDraws(draws: string[][]): string {
-  if (!Array.isArray(draws) || !draws.length) return "";
-  const lines: string[] = [];
-  for (let i = 0; i < draws.length; i++) {
-    lines.push(`Day ${i + 1}:`);
-    for (const item of draws[i] || []) lines.push(item);
-    lines.push("");
-  }
-  return lines.join("\n").trim();
+function isCenter(label: string) {
+  return norm(label) === norm(CENTER_LABEL);
 }
 
 export default function WinnersPage({ params }: { params: { packId: string } }) {
-  const { packId } = params;
+  const packId = decodeURIComponent(params.packId);
 
-  const [pack, setPack] = useState<CardsPack | null>(null);
-  const [drawText, setDrawText] = useState<string>("");
-  const [claims, setClaims] = useState<Record<string, ClaimInfo>>({});
-  const [claimName, setClaimName] = useState<string>("");
+  const [pack, setPack] = useState<StoredPack | null>(null);
+  const [caller, setCaller] = useState<CallerState | null>(null);
 
-  const [status, setStatus] = useState<string>("");
-
-  // Load pack + draws + claims on mount
   useEffect(() => {
-    const p = loadJson<CardsPack | null>(packStorageKey(packId), null);
-    setPack(p);
+    const p = safeJsonParse<StoredPack>(window.localStorage.getItem(packStorageKey(packId)));
+    setPack(p || null);
 
-    const storedDrawText = loadText(drawsStorageKey(packId), "");
-    const c = loadJson<Record<string, ClaimInfo>>(claimsStorageKey(packId), {});
-    setClaims(c);
+    // Prefer per-pack caller state
+    const byPack = safeJsonParse<CallerState>(window.localStorage.getItem(packCallerKey(packId)));
+    const global = safeJsonParse<CallerState>(window.localStorage.getItem(CALLER_STATE_KEY));
 
-    // Fix C: auto-fill drawText if empty by pulling from Caller state
-    if (storedDrawText.trim()) {
-      setDrawText(storedDrawText);
-      setStatus("Loaded calls from saved draw history for this pack.");
-      return;
-    }
+    const resolved =
+      (byPack && byPack.packId === packId ? byPack : null) ||
+      (global && global.packId === packId ? global : null) ||
+      null;
 
-    const callerState = loadJson<CallerState | null>(CALLER_STATE_KEY, null);
-    const samePack = callerState && (callerState.packId || "").trim() === packId;
-
-    if (samePack) {
-      const rebuilt = buildDrawTextFromCallerDraws(callerState.draws || []);
-      if (rebuilt.trim()) {
-        setDrawText(rebuilt);
-        saveText(drawsStorageKey(packId), rebuilt);
-        setStatus("Recovered calls from Caller history and saved them for this pack.");
-        return;
-      }
-      setStatus("Caller history found for this pack, but it has no draws yet.");
-      return;
-    }
-
-    setDrawText("");
-    setStatus(
-      "No calls found for this pack yet. Run draws in Caller, or paste the call history here."
-    );
+    setCaller(resolved);
   }, [packId]);
 
-  // Persist drawText edits
-  useEffect(() => {
-    saveText(drawsStorageKey(packId), drawText);
-  }, [packId, drawText]);
+  const calledSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of caller?.called || []) set.add(norm(c));
+    return set;
+  }, [caller]);
 
-  // Persist claims
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(claimsStorageKey(packId), JSON.stringify(claims));
-    } catch {
-      // ignore
-    }
-  }, [packId, claims]);
+  const completion = useMemo(() => {
+    const cards = pack?.cards || [];
+    const called = caller?.called || [];
 
-  const drawDays = useMemo(() => parseDrawText(drawText), [drawText]);
+    const results = cards.map((card) => {
+      let totalNeeded = 0;
+      let matched = 0;
 
-  const expected = useMemo(() => {
-    if (!pack) return [];
-    return computeExpectedWinners({
-      pack,
-      drawDays,
-      centerLabel: CENTER_LABEL,
-    });
-  }, [pack, drawDays]);
+      // Track at what call index this card becomes complete (blackout)
+      const needed = new Set<string>();
 
-  function toggleClaim(cardId: string) {
-    setClaims((prev) => {
-      const cur = prev[cardId] || { claimed: false };
-
-      if (cur.claimed) {
-        return { ...prev, [cardId]: { claimed: false } };
+      for (const row of card.grid) {
+        for (const cell of row) {
+          if (!cell) continue;
+          if (isCenter(cell)) continue;
+          totalNeeded += 1;
+          needed.add(norm(cell));
+        }
       }
 
-      const by = (claimName || "").trim() || undefined;
+      for (const key of needed) {
+        if (calledSet.has(key)) matched += 1;
+      }
+
+      // If complete, find earliest call index where all needed are satisfied
+      let completeAt: number | null = null;
+      if (matched === totalNeeded && totalNeeded > 0) {
+        const running = new Set<string>();
+        for (let i = 0; i < called.length; i++) {
+          running.add(norm(called[i]));
+          let ok = true;
+          for (const key of needed) {
+            if (!running.has(key)) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) {
+            completeAt = i + 1; // 1-based call number
+            break;
+          }
+        }
+      }
 
       return {
-        ...prev,
-        [cardId]: {
-          claimed: true,
-          claimedBy: by,
-          claimedAt: Date.now(),
-        },
+        cardId: card.id,
+        matched,
+        totalNeeded,
+        isComplete: matched === totalNeeded && totalNeeded > 0,
+        completeAtCall: completeAt,
       };
     });
-  }
 
-  const completed = expected
-    .filter((r) => r.completionDay != null)
-    .sort((a, b) => (a.completionDay! - b.completionDay!));
+    return results;
+  }, [pack, caller, calledSet]);
 
-  const firstCompletionDay = completed.length ? completed[0].completionDay : null;
-  const firstCompleters = firstCompletionDay
-    ? completed.filter((r) => r.completionDay === firstCompletionDay).map((r) => r.cardId)
-    : [];
+  const summary = useMemo(() => {
+    if (!pack?.cards?.length) return { complete: 0, total: 0 };
+    const total = pack.cards.length;
+    const complete = completion.filter((c) => c.isComplete).length;
+    return { complete, total };
+  }, [pack, completion]);
 
-  if (!pack) {
-    return (
-      <div
-        style={{
-          maxWidth: 1000,
-          margin: "0 auto",
-          padding: 16,
-          fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-        }}
-      >
-        <h1 style={{ marginTop: 0 }}>Expected Winners</h1>
-        <div style={{ padding: 12, borderRadius: 12, border: "1px solid #e5e7eb" }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Pack not found on this device</div>
-          <div>
-            packId: <b>{packId}</b>
-          </div>
-          <div style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
-            Generate the pack on this device so it saves locally.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const packTitle = pack.title || "Bingo Pack";
+  const title = pack?.title || "Winners";
+  const sponsorName = pack?.sponsorName || "";
 
   return (
-    <div
-      style={{
-        maxWidth: 1000,
-        margin: "0 auto",
-        padding: 16,
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      }}
-    >
-      <h1 style={{ marginTop: 0, marginBottom: 6 }}>Expected Winners</h1>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h1 style={{ margin: 0, fontSize: 34 }}>Winners</h1>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <a
+            href="/caller"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              textDecoration: "none",
+              color: "#111827",
+              display: "inline-block",
+            }}
+          >
+            Back to Caller
+          </a>
 
-      <div style={{ fontSize: 14, marginBottom: 12 }}>
-        <div>
-          packId: <b>{packId}</b>
-        </div>
-        <div>
-          title: <b>{packTitle}</b>
-        </div>
-        <div>
-          cards: <b>{pack.cards.length}</b>
+          <a
+            href="/"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              textDecoration: "none",
+              color: "#111827",
+              display: "inline-block",
+            }}
+          >
+            Back to Generator
+          </a>
         </div>
       </div>
 
-      <div style={{ marginBottom: 12, fontSize: 13, color: "#374151" }}>
-        <b>Status:</b> {status}
-      </div>
-
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Draw history</div>
-
-        <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 10 }}>
-          Format example:
-          <pre style={{ whiteSpace: "pre-wrap", margin: "8px 0 0 0" }}>
-{`Day 1:
-Trellis net
-Defoliate
-
-Day 2:
-VPD off
-Cal-Mag`}
-          </pre>
-          You can also use "1:" instead of "Day 1:".
-        </div>
-
-        <textarea
-          value={drawText}
-          onChange={(e) => setDrawText(e.target.value)}
-          rows={10}
-          style={{
-            width: "100%",
-            borderRadius: 10,
-            border: "1px solid #d1d5db",
-            padding: 12,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-            fontSize: 14,
-          }}
-        />
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
+        PackId: <b>{packId}</b>
+        {caller?.savedAt ? (
+          <>
+            {" "}
+            | Caller state saved: <b>{new Date(caller.savedAt).toLocaleString()}</b>
+            {" "}
+            | Called: <b>{caller.called.length}</b> | Remaining: <b>{caller.remaining.length}</b>
+          </>
+        ) : (
+          <> | Caller state: <b>Not loaded</b></>
+        )}
       </div>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Completion summary</div>
+        <div style={{ fontSize: 20, fontWeight: 900 }}>{title}</div>
+        {sponsorName ? <div style={{ color: "#6b7280", marginTop: 4 }}>Sponsor: {sponsorName}</div> : null}
+      </div>
 
-        {firstCompletionDay == null ? (
-          <div style={{ color: "#6b7280", fontSize: 13 }}>
-            No cards complete yet. If you already ran draws in Caller, your calls are not saved for this pack. Scroll up
-            and check the Status line.
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontWeight: 900, marginBottom: 8 }}>Completion summary</div>
+
+        {!pack?.cards?.length ? (
+          <div style={{ color: "#b91c1c", fontWeight: 700 }}>
+            No pack loaded for this packId. Generate a pack first, then open Winners from Caller.
+          </div>
+        ) : !caller ? (
+          <div style={{ color: "#b91c1c", fontWeight: 700 }}>
+            No caller state loaded for this pack. Go to Caller, run draws, and make sure it says it saved for this packId.
           </div>
         ) : (
-          <div style={{ fontSize: 13 }}>
-            First completion day: <b>Day {firstCompletionDay}</b>
-            <div style={{ marginTop: 6 }}>
-              Card(s) that should have completed first:{" "}
-              <b>{firstCompleters.join(", ")}</b>
-            </div>
+          <div>
+            Cards complete: <b>{summary.complete}</b> / <b>{summary.total}</b>
           </div>
         )}
       </div>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ fontWeight: 800 }}>Should-have-won timeline and claim tracking</div>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>Should-have-won timeline and claim tracking</div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <div style={{ fontSize: 13, color: "#6b7280" }}>Claim name (optional):</div>
-            <input
-              value={claimName}
-              onChange={(e) => setClaimName(e.target.value)}
-              placeholder="Name or handle"
-              style={{
-                padding: 10,
-                borderRadius: 10,
-                border: "1px solid #d1d5db",
-                minWidth: 220,
-              }}
-            />
-          </div>
-        </div>
-
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Card ID</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
-                  Expected completion
-                </th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Claimed</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Claim details</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Open card</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {expected.map((row) => {
-                const info = claims[row.cardId] || { claimed: false };
-
-                const completionText =
-                  row.completionDay == null ? "Not complete yet" : `Day ${row.completionDay}`;
-
-                const claimText =
-                  info.claimed && info.claimedAt
-                    ? `${info.claimedBy ? info.claimedBy + " " : ""}(${new Date(info.claimedAt).toLocaleString()})`
-                    : "";
-
-                return (
-                  <tr key={row.cardId}>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 800 }}>
-                      {row.cardId}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{completionText}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
-                      <input type="checkbox" checked={!!info.claimed} onChange={() => toggleClaim(row.cardId)} />
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{claimText}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
-                      <a href={`/card/${encodeURIComponent(packId)}/${encodeURIComponent(row.cardId)}`}>Open</a>
+        {pack?.cards?.length ? (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ textAlign: "left" }}>
+                  <th style={{ padding: 10, borderBottom: "1px solid #e5e7eb" }}>Card ID</th>
+                  <th style={{ padding: 10, borderBottom: "1px solid #e5e7eb" }}>Expected completion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completion.map((c) => (
+                  <tr key={c.cardId}>
+                    <td style={{ padding: 10, borderBottom: "1px solid #f3f4f6", fontWeight: 700 }}>{c.cardId}</td>
+                    <td style={{ padding: 10, borderBottom: "1px solid #f3f4f6" }}>
+                      {c.isComplete ? (
+                        <span>Complete at call #{c.completeAtCall ?? "?"}</span>
+                      ) : (
+                        <span>Not complete yet ({c.matched}/{c.totalNeeded})</span>
+                      )}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
 
-        <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
-          Completion day is computed from official calls only (blackout). Claim checkboxes are for claim-first tracking.
-        </div>
+            <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
+              Completion is computed from official calls only (blackout). Center is treated as FREE.
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: "#6b7280" }}>No cards found for this pack.</div>
+        )}
       </div>
     </div>
   );
