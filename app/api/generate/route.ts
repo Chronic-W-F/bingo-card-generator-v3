@@ -110,10 +110,10 @@ export async function POST(req: Request) {
       })
     );
 
-    // ✅ Fix for TS/Vercel: wrap Buffer in Blob (BodyInit-safe)
-    const pdfBlob = new Blob([pdfBuffer], { type: "application/pdf" });
+    // ✅ TS-safe for Vercel: Buffer -> Uint8Array (valid BodyInit)
+    const pdfBytes = new Uint8Array(pdfBuffer);
 
-    return new NextResponse(pdfBlob, {
+    return new NextResponse(pdfBytes, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="bingo-cards.pdf"`,
