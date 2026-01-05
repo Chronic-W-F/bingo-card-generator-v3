@@ -15,18 +15,19 @@ type BingoCard = {
 type Body = {
   title?: string;
   sponsorName?: string;
-  bannerImageUrl?: string; // can be "/banners/current.png" or https://...
+  bannerImageUrl?: string; // "/banners/current.png" or https://...
   card: BingoCard;
 };
 
 function toAbsoluteUrl(reqUrl: string, maybeRelative?: string) {
   if (!maybeRelative) return undefined;
+
+  // Already absolute?
   try {
-    // If already absolute, keep it
     const u = new URL(maybeRelative);
     return u.toString();
   } catch {
-    // Relative path -> absolute using request origin
+    // Relative -> absolute using request origin
     const base = new URL(reqUrl);
     return new URL(maybeRelative, `${base.protocol}//${base.host}`).toString();
   }
@@ -47,19 +48,17 @@ export async function POST(req: Request) {
     const sponsorName = body.sponsorName || "";
     const bannerImageUrl = toAbsoluteUrl(req.url, body.bannerImageUrl);
 
-    // Render a 1-page PDF by passing a single card
-    const doc = (
-      <BingoPackPdf
-        cards={[body.card]}
-        title={title}
-        sponsorName={sponsorName}
-        bannerImageUrl={bannerImageUrl}
-      />
-    );
+    // ✅ NO JSX in .ts: use React.createElement
+    const doc = React.createElement(BingoPackPdf, {
+      cards: [body.card],
+      title,
+      sponsorName,
+      bannerImageUrl,
+    });
 
     const buffer = await pdf(doc).toBuffer();
 
-    // TS-safe BodyInit: convert to a real Uint8Array (not Buffer typing)
+    // ✅ BodyInit-safe: Uint8Array (not Buffer typing)
     const bytes = Uint8Array.from(buffer);
 
     return new NextResponse(bytes, {
