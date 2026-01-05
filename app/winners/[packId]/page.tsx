@@ -48,7 +48,6 @@ function safeJsonParse<T>(raw: string | null): T | null {
   }
 }
 
-// Normalize for matching
 function norm(s: string) {
   return (s || "")
     .trim()
@@ -66,21 +65,40 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
 
   const [pack, setPack] = useState<StoredPack | null>(null);
   const [caller, setCaller] = useState<CallerState | null>(null);
+  const [callerWarning, setCallerWarning] = useState<string>("");
 
   useEffect(() => {
     const p = safeJsonParse<StoredPack>(window.localStorage.getItem(packStorageKey(packId)));
     setPack(p || null);
 
-    // Prefer per-pack caller state
+    // 1) try per-pack caller state
     const byPack = safeJsonParse<CallerState>(window.localStorage.getItem(packCallerKey(packId)));
+
+    // 2) try global caller state
     const global = safeJsonParse<CallerState>(window.localStorage.getItem(CALLER_STATE_KEY));
 
-    const resolved =
-      (byPack && byPack.packId === packId ? byPack : null) ||
-      (global && global.packId === packId ? global : null) ||
-      null;
+    // Prefer exact match
+    if (byPack?.packId === packId) {
+      setCaller(byPack);
+      setCallerWarning("");
+      return;
+    }
 
-    setCaller(resolved);
+    // Fallback: if global exists but packId differs, show warning instead of "not loaded"
+    if (global) {
+      setCaller(global);
+      if (global.packId !== packId) {
+        setCallerWarning(
+          `Loaded global caller state for pack ${global.packId}, but you are viewing pack ${packId}. Go back to Caller and run one draw to resave under this pack.`
+        );
+      } else {
+        setCallerWarning("");
+      }
+      return;
+    }
+
+    setCaller(null);
+    setCallerWarning("");
   }, [packId]);
 
   const calledSet = useMemo(() => {
@@ -93,12 +111,9 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
     const cards = pack?.cards || [];
     const called = caller?.called || [];
 
-    const results = cards.map((card) => {
-      let totalNeeded = 0;
-      let matched = 0;
-
-      // Track at what call index this card becomes complete (blackout)
+    return cards.map((card) => {
       const needed = new Set<string>();
+      let totalNeeded = 0;
 
       for (const row of card.grid) {
         for (const cell of row) {
@@ -109,11 +124,11 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
         }
       }
 
+      let matched = 0;
       for (const key of needed) {
         if (calledSet.has(key)) matched += 1;
       }
 
-      // If complete, find earliest call index where all needed are satisfied
       let completeAt: number | null = null;
       if (matched === totalNeeded && totalNeeded > 0) {
         const running = new Set<string>();
@@ -127,7 +142,7 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
             }
           }
           if (ok) {
-            completeAt = i + 1; // 1-based call number
+            completeAt = i + 1;
             break;
           }
         }
@@ -141,15 +156,12 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
         completeAtCall: completeAt,
       };
     });
-
-    return results;
   }, [pack, caller, calledSet]);
 
   const summary = useMemo(() => {
-    if (!pack?.cards?.length) return { complete: 0, total: 0 };
-    const total = pack.cards.length;
+    const total = pack?.cards?.length || 0;
     const complete = completion.filter((c) => c.isComplete).length;
-    return { complete, total };
+    return { total, complete };
   }, [pack, completion]);
 
   const title = pack?.title || "Winners";
@@ -193,18 +205,22 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
       </div>
 
       <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
-        PackId: <b>{packId}</b>
+        PackId: <b>{packId}</b> | Caller state:{" "}
+        <b>{caller ? "Loaded" : "Not loaded"}</b>
         {caller?.savedAt ? (
           <>
             {" "}
-            | Caller state saved: <b>{new Date(caller.savedAt).toLocaleString()}</b>
-            {" "}
-            | Called: <b>{caller.called.length}</b> | Remaining: <b>{caller.remaining.length}</b>
+            | Saved: <b>{new Date(caller.savedAt).toLocaleString()}</b> | Called:{" "}
+            <b>{caller.called.length}</b> | Remaining: <b>{caller.remaining.length}</b>
           </>
-        ) : (
-          <> | Caller state: <b>Not loaded</b></>
-        )}
+        ) : null}
       </div>
+
+      {callerWarning ? (
+        <div style={{ marginBottom: 14, color: "#b45309", fontWeight: 700 }}>
+          {callerWarning}
+        </div>
+      ) : null}
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <div style={{ fontSize: 20, fontWeight: 900 }}>{title}</div>
@@ -216,11 +232,11 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
 
         {!pack?.cards?.length ? (
           <div style={{ color: "#b91c1c", fontWeight: 700 }}>
-            No pack loaded for this packId. Generate a pack first, then open Winners from Caller.
+            No pack loaded for this packId. Generate a pack first, then open Winners.
           </div>
         ) : !caller ? (
           <div style={{ color: "#b91c1c", fontWeight: 700 }}>
-            No caller state loaded for this pack. Go to Caller, run draws, and make sure it says it saved for this packId.
+            No caller state loaded for this pack. Go to Caller, run one draw, and confirm “Saved for pack …”
           </div>
         ) : (
           <div>
@@ -230,7 +246,7 @@ export default function WinnersPage({ params }: { params: { packId: string } }) 
       </div>
 
       <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>Should-have-won timeline and claim tracking</div>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>Should-have-won timeline</div>
 
         {pack?.cards?.length ? (
           <div style={{ overflowX: "auto" }}>
