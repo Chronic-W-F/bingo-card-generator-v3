@@ -51,6 +51,16 @@ async function readStreamToUint8Array(stream: ReadableStream<Uint8Array>) {
   return out;
 }
 
+/**
+ * ✅ Guaranteed ArrayBuffer (not ArrayBufferLike / SharedArrayBuffer)
+ * This avoids TS/DOM BlobPart typing issues on Vercel builds.
+ */
+function uint8ToArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  const ab = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(ab).set(u8);
+  return ab;
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
@@ -89,8 +99,9 @@ export async function POST(req: Request) {
       bytes = new Uint8Array(result);
     }
 
-    // ✅ TS-safe BodyInit: Blob
-    const pdfBlob = new Blob([bytes], { type: "application/pdf" });
+    // ✅ TS-safe: convert to real ArrayBuffer, then Blob
+    const ab = uint8ToArrayBuffer(bytes);
+    const pdfBlob = new Blob([ab], { type: "application/pdf" });
 
     return new Response(pdfBlob, {
       headers: {
