@@ -15,9 +15,15 @@ type Body = {
   title?: string;
   sponsorName?: string;
   bannerImageUrl?: string; // "/banners/current.png" or https://...
-  sponsorLogoUrl?: string; // optional if your PDF supports it
   card: BingoCard;
 };
+
+function sanitizeFilename(name: string) {
+  return (name || "")
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function toAbsoluteUrl(reqUrl: string, maybeRelative?: string) {
   if (!maybeRelative) return undefined;
@@ -32,7 +38,6 @@ function toAbsoluteUrl(reqUrl: string, maybeRelative?: string) {
   }
 }
 
-// Read a WHATWG ReadableStream<Uint8Array> into one Uint8Array
 async function readStreamToUint8Array(stream: ReadableStream<Uint8Array>) {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -56,14 +61,14 @@ async function readStreamToUint8Array(stream: ReadableStream<Uint8Array>) {
   return out;
 }
 
-// Convert Uint8Array into a NEW ArrayBuffer (not SharedArrayBuffer-ish typing)
+/**
+ * ✅ CRITICAL: produce a "pure" ArrayBuffer (NOT SharedArrayBuffer union)
+ * by copying into a brand new Uint8Array, then returning its .buffer.
+ */
 function toPureArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  // Slice creates a standalone ArrayBuffer with the exact bytes
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-}
-
-function sanitizeFilename(name: string) {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120);
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer; // always ArrayBuffer
 }
 
 export async function POST(req: Request) {
@@ -80,38 +85,30 @@ export async function POST(req: Request) {
     const title = body.title || "Harvest Heroes Bingo";
     const sponsorName = body.sponsorName || "";
     const bannerImageUrl = toAbsoluteUrl(req.url, body.bannerImageUrl);
-    const sponsorLogoUrl = toAbsoluteUrl(req.url, body.sponsorLogoUrl);
 
-    // No JSX in .ts route: use React.createElement
-    const doc = React.createElement(BingoPackPdf as any, {
-      // Render a 1-page PDF by passing a single card
+    // No JSX in .ts route
+    const doc = React.createElement(BingoPackPdf, {
       cards: [body.card],
       title,
       sponsorName,
       bannerImageUrl,
-      sponsorLogoUrl,
     });
 
-    // react-pdf's toBuffer() can return Buffer OR a ReadableStream depending on build/runtime.
+    // react-pdf differs across builds: Buffer | Uint8Array | ReadableStream
     const result = await (pdf(doc) as any).toBuffer();
 
     let bytes: Uint8Array;
 
-    // Buffer is a Uint8Array subclass in Node, so this covers Buffer too.
+    // Buffer is also Uint8Array, but we’ll normalize anyway
     if (result instanceof Uint8Array) {
       bytes = result;
     } else if (result && typeof result.getReader === "function") {
       bytes = await readStreamToUint8Array(result as ReadableStream<Uint8Array>);
-    } else if (result && typeof result.arrayBuffer === "function") {
-      // extremely defensive fallback
-      const ab = await result.arrayBuffer();
-      bytes = new Uint8Array(ab);
     } else {
-      // last resort (may throw if result is weird)
+      // last resort: try constructing
       bytes = new Uint8Array(result);
     }
 
-    // ✅ TS-safe BodyInit: ArrayBuffer (not Buffer, not Uint8Array<ArrayBufferLike>)
     const arrayBuffer = toPureArrayBuffer(bytes);
 
     const filename =
