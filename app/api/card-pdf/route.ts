@@ -1,11 +1,14 @@
 // app/api/card-pdf/route.ts
 import React from "react";
-import { pdf } from "@react-pdf/renderer";
+import { renderToBuffer } from "@react-pdf/renderer";
 import SingleCardPdf from "@/pdf/SingleCardPdf";
 
 export const runtime = "nodejs";
 
-type BingoCard = { id: string; grid: string[][] };
+type BingoCard = {
+  id: string;
+  grid: string[][];
+};
 
 type Body = {
   title?: string;
@@ -28,10 +31,12 @@ export async function POST(req: Request) {
     const body = (await req.json()) as Body;
 
     if (!body?.card?.id || !Array.isArray(body.card.grid)) {
-      return Response.json({ error: "Missing card payload." }, { status: 400 });
+      return Response.json(
+        { error: "Missing or invalid card payload" },
+        { status: 400 }
+      );
     }
 
-    // ✅ NO JSX in route.ts
     const doc = React.createElement(SingleCardPdf, {
       title: body.title || "Bingo Card",
       sponsorName: body.sponsorName || "",
@@ -40,12 +45,14 @@ export async function POST(req: Request) {
       card: body.card,
     });
 
-    const out = await (pdf(doc) as any).toBuffer(); // Buffer on node
-    const bytes = new Uint8Array(out);
+    // ✅ THIS is the critical fix
+    const buffer = await renderToBuffer(doc);
 
-    const filename = `${sanitizeFilename(body.title || "bingo-card")}-${body.card.id}.pdf`;
+    const filename = `${sanitizeFilename(
+      body.title || "bingo-card"
+    )}-${body.card.id}.pdf`;
 
-    return new Response(bytes, {
+    return new Response(buffer, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
@@ -53,9 +60,9 @@ export async function POST(req: Request) {
         "Cache-Control": "no-store",
       },
     });
-  } catch (e: any) {
+  } catch (err: any) {
     return Response.json(
-      { error: e?.message || "card-pdf failed" },
+      { error: err?.message || "card-pdf failed" },
       { status: 500 }
     );
   }
