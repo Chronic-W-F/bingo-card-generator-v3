@@ -1,3 +1,4 @@
+// app/caller/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -61,7 +62,7 @@ function safeJsonParse<T>(raw: string | null): T | null {
 function saveCallerStateEverywhere(state: CallerState) {
   try {
     window.localStorage.setItem(CALLER_STATE_KEY, JSON.stringify(state));
-    window.localStorage.setItem(packCallerKey(state.packId), JSON.stringify(state));
+    window.localStorage.setItem(packCallerKeys: callerState:${state.packId}`, JSON.stringify(state));
     window.localStorage.setItem(LAST_PACK_KEY, state.packId);
   } catch {
     // ignore
@@ -77,28 +78,37 @@ function formatSavedAt(ts: number | null) {
   }
 }
 
-function getPackIdFromUrl(): string {
+function readLastPackId() {
   try {
-    const u = new URL(window.location.href);
-    const q = u.searchParams.get("packId");
-    return (q || "").trim();
+    return window.localStorage.getItem(LAST_PACK_KEY) || "";
   } catch {
     return "";
   }
 }
 
-function getResolvedPackId(fallback?: string) {
-  const fromUrl = getPackIdFromUrl();
-  if (fromUrl) return fromUrl;
-
+function readPoolFromStorage() {
   try {
-    const lp = window.localStorage.getItem(LAST_PACK_KEY) || "";
-    if (lp) return lp;
+    const rawPool = window.localStorage.getItem(POOL_KEY) || "";
+    const normalized = uniqCaseSensitive(normalizeLines(rawPool));
+    return normalized;
   } catch {
-    // ignore
+    return [];
   }
+}
 
-  return fallback || "pack_unknown";
+function readCallerStateForPack(packId: string) {
+  const byPack = safeJsonParse<CallerState>(
+    window.localStorage.getItem(packCallerKey(packId))
+  );
+  const global = safeJsonParse<CallerState>(
+    window.localStorage.getItem(CALLER_STATE_KEY)
+  );
+
+  const state =
+    (byPack && byPack.packId === packId ? byPack : null) ||
+    (global && global.packId === packId ? global : null);
+
+  return state;
 }
 
 export default function CallerPage() {
@@ -123,79 +133,89 @@ export default function CallerPage() {
   const [confirmCount, setConfirmCount] = useState<number>(0);
   const [confirmPreview, setConfirmPreview] = useState<string[]>([]);
 
-  const didInitRef = useRef(false);
-
   const uniqueCount = poolItems.length;
 
   const drawCount = useMemo(() => {
+    // Clamp only when used
     const raw = Number.parseInt(drawCountInput, 10);
     if (!Number.isFinite(raw)) return 10;
     return Math.max(1, Math.min(50, raw));
   }, [drawCountInput]);
 
-  // initial load
-  useEffect(() => {
-    const resolvedPackId = getResolvedPackId("pack_unknown");
-    setPackId(resolvedPackId);
+  const hasMountedRef = useRef(false);
 
-    // Load pool from localStorage
-    const rawPool = window.localStorage.getItem(POOL_KEY) || "";
-    const normalizedPool = uniqCaseSensitive(normalizeLines(rawPool));
-    setPoolText(normalizedPool.join("\n"));
+  function hydrateForPack(nextPackId: string) {
+    setError("");
+
+    const normalizedPool = readPoolFromStorage();
     setPoolItems(normalizedPool);
+    setPoolText(normalizedPool.join("\n"));
 
-    // Load caller state:
-    // 1) per-pack state for this packId
-    // 2) global state, even if packId mismatches (fallback)
-    const byPack = safeJsonParse<CallerState>(
-      window.localStorage.getItem(packCallerKey(resolvedPackId))
-    );
-    const global = safeJsonParse<CallerState>(
-      window.localStorage.getItem(CALLER_STATE_KEY)
-    );
-
-    const state =
-      (byPack && Array.isArray(byPack.remaining) && Array.isArray(byPack.called) ? byPack : null) ||
-      (global && Array.isArray(global.remaining) && Array.isArray(global.called) ? global : null);
+    const state = readCallerStateForPack(nextPackId);
 
     if (state) {
-      // If we loaded global with different packId, adopt its packId so future loads match.
-      const adoptedPackId = state.packId || resolvedPackId;
-      setPackId(adoptedPackId);
-
       setRemaining(state.remaining || []);
       setCalled(state.called || []);
       setLastBatch(state.lastBatch || []);
       setLastSavedAt(state.savedAt ?? null);
-
-      // Ensure LAST_PACK_KEY is aligned to the adopted pack
-      try {
-        window.localStorage.setItem(LAST_PACK_KEY, adoptedPackId);
-      } catch {}
-
-      setStatusMsg(`Loaded caller state for pack ${adoptedPackId}.`);
-      didInitRef.current = true;
+      setStatusMsg(`Loaded caller state for pack ${nextPackId}.`);
       return;
     }
 
-    // No state yet: initialize if pool is usable
-    if (normalizedPool.length >= 24) {
-      const initRemaining = shuffle(normalizedPool);
-      setRemaining(initRemaining);
-      setCalled([]);
-      setLastBatch([]);
-      setLastSavedAt(null);
-      setStatusMsg(`Loaded pool from ${POOL_KEY}. Shuffled and ready.`);
-    } else {
-      setRemaining([]);
-      setCalled([]);
-      setLastBatch([]);
-      setLastSavedAt(null);
-      setStatusMsg(`Pool is empty or too small. Paste pool items and Save pool and reshuffle.`);
+    // No state yet: initialize for this pack
+    const initRemaining = shuffle(normalizedPool);
+    setRemaining(initRemaining);
+    setCalled([]);
+    setLastBatch([]);
+    setLastSavedAt(null);
+    setStatusMsg(`Loaded pool from ${POOL_KEY}. Shuffled and ready for pack ${nextPackId}.`);
+  }
+
+  function syncFromLastPack(reason: string) {
+    const lp = readLastPackId();
+    const resolved = lp || packId || "pack_unknown";
+
+    // If pack changed, rehydrate everything for that pack
+    if (resolved && resolved !== packId) {
+      setPackId(resolved);
+      hydrateForPack(resolved);
+      setStatusMsg(`Synced packId from localStorage (${reason}): ${resolved}`);
+      return;
     }
 
-    didInitRef.current = true;
+    // First mount: ensure we hydrate once
+    if (!hasMountedRef.current) {
+      setPackId(resolved);
+      hydrateForPack(resolved);
+      hasMountedRef.current = true;
+    }
+  }
+
+  // initial load
+  useEffect(() => {
+    syncFromLastPack("initial load");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // when user returns to this tab / app
+  useEffect(() => {
+    function onFocus() {
+      syncFromLastPack("focus");
+    }
+    function onVis() {
+      if (document.visibilityState === "visible") {
+        syncFromLastPack("visibility");
+      }
+    }
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [packId]);
 
   // keep poolItems synced with text
   useEffect(() => {
@@ -203,31 +223,19 @@ export default function CallerPage() {
     setPoolItems(normalized);
   }, [poolText]);
 
-  // AUTO-PERSIST: once initialized, any state change is saved.
-  useEffect(() => {
-    if (!didInitRef.current) return;
-    if (!packId) return;
-
-    // Do not auto-save during confirm modal open (avoids saving partial previews)
-    const nextState: CallerState = {
-      packId,
-      savedAt: Date.now(),
-      pool: poolItems,
-      remaining,
-      called,
-      lastBatch,
-    };
-
-    saveCallerStateEverywhere(nextState);
-    setLastSavedAt(nextState.savedAt);
-  }, [packId, poolItems, remaining, called, lastBatch]);
-
   function persistPoolOnly(items: string[]) {
     try {
       window.localStorage.setItem(POOL_KEY, items.join("\n"));
     } catch {
       // ignore
     }
+  }
+
+  function ensurePackId() {
+    const lp = readLastPackId();
+    const resolved = lp || packId || "pack_unknown";
+    setPackId(resolved);
+    return resolved;
   }
 
   function handleSavePoolAndReshuffle() {
@@ -239,28 +247,37 @@ export default function CallerPage() {
       return;
     }
 
-    const resolved = getResolvedPackId(packId || "pack_unknown");
-    setPackId(resolved);
-
+    const thisPackId = ensurePackId();
     const shuffled = shuffle(normalized);
 
     persistPoolOnly(normalized);
+
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: normalized,
+      remaining: shuffled,
+      called: [],
+      lastBatch: [],
+    };
 
     setPoolItems(normalized);
     setRemaining(shuffled);
     setCalled([]);
     setLastBatch([]);
+    setLastSavedAt(nextState.savedAt);
+
+    saveCallerStateEverywhere(nextState);
 
     setStatusMsg(
-      `Saved pool to ${POOL_KEY} and reshuffled. Saved caller state for pack ${resolved}. (${normalized.length} items)`
+      `Saved pool to ${POOL_KEY} and reshuffled. Also saved caller state for pack ${thisPackId}. (${normalized.length} items)`
     );
   }
 
   function openConfirmNextDraw() {
     setError("");
 
-    const resolved = getResolvedPackId(packId || "pack_unknown");
-    setPackId(resolved);
+    const thisPackId = ensurePackId();
 
     if (poolItems.length < 24) {
       setError("Pool too small. Need at least 24 unique items.");
@@ -277,14 +294,14 @@ export default function CallerPage() {
     setConfirmPreview(preview);
     setConfirmOpen(true);
 
-    setStatusMsg(`Ready to draw ${count}. (Will save under pack ${resolved})`);
+    setStatusMsg(`Ready to draw ${count}. (Will save under pack ${thisPackId})`);
   }
 
   function doNextDrawConfirmed() {
     setConfirmOpen(false);
     setError("");
 
-    if (remaining.length === 0) return;
+    const thisPackId = ensurePackId();
 
     const count = Math.min(drawCount, remaining.length);
     const batch = remaining.slice(0, count);
@@ -295,12 +312,26 @@ export default function CallerPage() {
     setCalled(nextCalled);
     setLastBatch(batch);
 
-    setStatusMsg(`Drew ${count}. Saved.`);
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: poolItems,
+      remaining: nextRemaining,
+      called: nextCalled,
+      lastBatch: batch,
+    };
+
+    setLastSavedAt(nextState.savedAt);
+    saveCallerStateEverywhere(nextState);
+
+    setStatusMsg(`Drew ${count}. Saved caller state for pack ${thisPackId}.`);
   }
 
   function undoLastBatch() {
     setError("");
     if (!lastBatch.length) return;
+
+    const thisPackId = ensurePackId();
 
     const nextCalled = called.slice(0, Math.max(0, called.length - lastBatch.length));
     const nextRemaining = [...lastBatch, ...remaining];
@@ -309,11 +340,24 @@ export default function CallerPage() {
     setRemaining(nextRemaining);
     setLastBatch([]);
 
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: poolItems,
+      remaining: nextRemaining,
+      called: nextCalled,
+      lastBatch: [],
+    };
+
+    setLastSavedAt(nextState.savedAt);
+    saveCallerStateEverywhere(nextState);
     setStatusMsg("Undid last batch. Saved.");
   }
 
   function resetGame() {
     setError("");
+
+    const thisPackId = ensurePackId();
 
     const normalized = poolItems;
     if (normalized.length < 24) {
@@ -323,11 +367,22 @@ export default function CallerPage() {
 
     const reshuffled = shuffle(normalized);
 
+    const nextState: CallerState = {
+      packId: thisPackId,
+      savedAt: Date.now(),
+      pool: normalized,
+      remaining: reshuffled,
+      called: [],
+      lastBatch: [],
+    };
+
     setRemaining(reshuffled);
     setCalled([]);
     setLastBatch([]);
+    setLastSavedAt(nextState.savedAt);
 
-    setStatusMsg("Game reset and reshuffled. Saved.");
+    saveCallerStateEverywhere(nextState);
+    setStatusMsg(`Game reset and reshuffled. Saved for pack ${thisPackId}.`);
   }
 
   // Fix mobile “can’t delete” by clamping only on blur
@@ -392,6 +447,20 @@ export default function CallerPage() {
           >
             Open Winners
           </a>
+
+          <button
+            onClick={() => syncFromLastPack("manual sync")}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #111827",
+              background: "white",
+              cursor: "pointer",
+              minWidth: 140,
+            }}
+          >
+            Sync packId
+          </button>
         </div>
       </div>
 
@@ -562,8 +631,8 @@ export default function CallerPage() {
           <div style={{ width: "100%", maxWidth: 520, background: "white", borderRadius: 16, padding: 16, border: "1px solid #e5e7eb" }}>
             <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 8 }}>Confirm next draw</div>
             <div style={{ color: "#374151", marginBottom: 12 }}>
-              You are about to draw <b>{confirmCount}</b> item{confirmCount === 1 ? "" : "s"}.
-              This will be saved under pack <b>{packId}</b>.
+              You are about to draw <b>{confirmCount}</b> item{confirmCount === 1 ? "" : "s"}. This will be saved under pack{" "}
+              <b>{packId}</b>.
             </div>
 
             {confirmPreview.length ? (
