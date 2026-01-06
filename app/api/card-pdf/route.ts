@@ -17,20 +17,42 @@ type Body = {
   card: BingoCard;
 };
 
-/**
- * Convert relative URLs (like /banners/current.png) into absolute URLs
- * so @react-pdf can fetch them on the server.
- */
 function toAbsoluteUrl(reqUrl: string, maybeRelative?: string) {
   if (!maybeRelative) return undefined;
 
   try {
-    // already absolute
-    return new URL(maybeRelative).toString();
+    return new URL(maybeRelative).toString(); // already absolute
   } catch {
     const base = new URL(reqUrl);
     return new URL(maybeRelative, `${base.protocol}//${base.host}`).toString();
   }
+}
+
+async function readStreamToUint8Array(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      total += value.length;
+    }
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+}
+
+function uint8ToArrayBuffer(u8: Uint8Array) {
+  return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
 }
 
 export async function POST(req: Request) {
@@ -48,10 +70,7 @@ export async function POST(req: Request) {
     const sponsorName = body.sponsorName || "";
     const bannerImageUrl = toAbsoluteUrl(req.url, body.bannerImageUrl);
 
-    /**
-     * IMPORTANT:
-     * No JSX in .ts route files — use React.createElement
-     */
+    // No JSX in .ts route file
     const doc = React.createElement(BingoPackPdf, {
       cards: [body.card],
       title,
@@ -59,20 +78,29 @@ export async function POST(req: Request) {
       bannerImageUrl,
     });
 
-    /**
-     * react-pdf returns a Node Buffer here
-     */
-    const buffer: Buffer = await pdf(doc).toBuffer();
+    // Vercel/Next may give Buffer OR ReadableStream depending on build/runtime
+    const result: any = await (pdf(doc) as any).toBuffer();
 
-    /**
-     * ✅ CRITICAL FIX
-     * Convert Buffer → ArrayBuffer slice
-     * This is a valid Web Response BodyInit
-     */
-    const arrayBuffer = buffer.buffer.slice(
-      buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength
-    );
+    let bytes: Uint8Array;
+
+    // ReadableStream path
+    if (result && typeof result.getReader === "function") {
+      bytes = await readStreamToUint8Array(result as ReadableStream<Uint8Array>);
+    }
+    // Uint8Array path
+    else if (result instanceof Uint8Array) {
+      bytes = result;
+    }
+    // Buffer path (node)
+    else if (typeof Buffer !== "undefined" && Buffer.isBuffer(result)) {
+      bytes = new Uint8Array(result);
+    }
+    // Fallback
+    else {
+      bytes = new Uint8Array(result);
+    }
+
+    const arrayBuffer = uint8ToArrayBuffer(bytes);
 
     return new Response(arrayBuffer, {
       headers: {
