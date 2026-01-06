@@ -14,8 +14,8 @@ export async function downloadSingleCardPdf(payload: {
   sponsorLogoUrl?: string;
   card: BingoCard;
 }) {
-  // ✅ CRITICAL: open tab immediately from user gesture
-  const popup = window.open("", "_blank");
+  // ✅ Must happen immediately from the user click
+  const popup = window.open("about:blank", "_blank");
 
   try {
     const res = await fetch("/api/card-pdf", {
@@ -31,32 +31,39 @@ export async function downloadSingleCardPdf(payload: {
 
     const blob = await res.blob();
 
-    // Safety check: if server returned HTML/JSON error
     if (blob.size < 800) {
       const t = await blob.text().catch(() => "");
-      throw new Error(
-        `card-pdf returned tiny blob (${blob.size}): ${t.slice(0, 300)}`
-      );
+      throw new Error(`card-pdf returned tiny blob (${blob.size}): ${t.slice(0, 300)}`);
     }
 
     const url = URL.createObjectURL(blob);
 
+    // ✅ Best path: use the tab we opened from the gesture
     if (popup && !popup.closed) {
-      // ✅ Navigate already-opened tab (Android-safe)
       popup.location.href = url;
-
-      // Delay revoke or Android fails to load
       setTimeout(() => {
         try {
           URL.revokeObjectURL(url);
         } catch {}
       }, 15000);
-    } else {
-      // Fallback (desktop / popup blocked)
-      downloadBlob(`bingo-card-${payload.card.id}.pdf`, blob);
+      return;
     }
+
+    // ✅ Popup blocked: fall back to same-tab open (Android-safe)
+    // This usually avoids Chrome "Download error" because it's not a forced download,
+    // it's just opening the PDF viewer.
+    window.location.href = url;
+
+    // Optional: still offer the classic download (works on many devices)
+    // downloadBlob(`bingo-card-${payload.card.id}.pdf`, blob);
+
+    setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }, 15000);
   } catch (err) {
-    // Close blank tab if something failed
+    // If popup opened but we failed, close the blank tab
     try {
       if (popup && !popup.closed) popup.close();
     } catch {}
