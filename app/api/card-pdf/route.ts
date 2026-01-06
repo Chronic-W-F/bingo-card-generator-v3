@@ -21,7 +21,7 @@ function toAbsoluteUrl(reqUrl: string, maybeRelative?: string) {
   if (!maybeRelative) return undefined;
 
   try {
-    return new URL(maybeRelative).toString(); // already absolute
+    return new URL(maybeRelative).toString();
   } catch {
     const base = new URL(reqUrl);
     return new URL(maybeRelative, `${base.protocol}//${base.host}`).toString();
@@ -51,10 +51,6 @@ async function readStreamToUint8Array(stream: ReadableStream<Uint8Array>) {
   return out;
 }
 
-function uint8ToArrayBuffer(u8: Uint8Array) {
-  return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
-}
-
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
@@ -70,7 +66,7 @@ export async function POST(req: Request) {
     const sponsorName = body.sponsorName || "";
     const bannerImageUrl = toAbsoluteUrl(req.url, body.bannerImageUrl);
 
-    // No JSX in .ts route file
+    // No JSX in .ts route: React.createElement
     const doc = React.createElement(BingoPackPdf, {
       cards: [body.card],
       title,
@@ -78,31 +74,25 @@ export async function POST(req: Request) {
       bannerImageUrl,
     });
 
-    // Vercel/Next may give Buffer OR ReadableStream depending on build/runtime
+    // react-pdf may return Buffer OR ReadableStream depending on environment
     const result: any = await (pdf(doc) as any).toBuffer();
 
     let bytes: Uint8Array;
 
-    // ReadableStream path
     if (result && typeof result.getReader === "function") {
       bytes = await readStreamToUint8Array(result as ReadableStream<Uint8Array>);
-    }
-    // Uint8Array path
-    else if (result instanceof Uint8Array) {
+    } else if (result instanceof Uint8Array) {
       bytes = result;
-    }
-    // Buffer path (node)
-    else if (typeof Buffer !== "undefined" && Buffer.isBuffer(result)) {
+    } else if (typeof Buffer !== "undefined" && Buffer.isBuffer(result)) {
       bytes = new Uint8Array(result);
-    }
-    // Fallback
-    else {
+    } else {
       bytes = new Uint8Array(result);
     }
 
-    const arrayBuffer = uint8ToArrayBuffer(bytes);
+    // ✅ TS-safe BodyInit: Blob
+    const pdfBlob = new Blob([bytes], { type: "application/pdf" });
 
-    return new Response(arrayBuffer, {
+    return new Response(pdfBlob, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="bingo-card-${body.card.id}.pdf"`,
