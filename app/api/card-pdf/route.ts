@@ -3,7 +3,7 @@ import React from "react";
 import { pdf } from "@react-pdf/renderer";
 import SingleCardPdf from "@/pdf/SingleCardPdf";
 
-export const runtime = "nodejs"; // IMPORTANT: react-pdf needs node runtime on Vercel
+export const runtime = "nodejs";
 
 type BingoCard = { id: string; grid: string[][] };
 
@@ -31,17 +31,16 @@ export async function POST(req: Request) {
       return Response.json({ error: "Missing card payload." }, { status: 400 });
     }
 
-    const doc = (
-      <SingleCardPdf
-        title={body.title || "Bingo Card"}
-        sponsorName={body.sponsorName || ""}
-        bannerImageUrl={body.bannerImageUrl || ""}
-        sponsorLogoUrl={body.sponsorLogoUrl || ""}
-        card={body.card}
-      />
-    );
+    // ✅ NO JSX in route.ts
+    const doc = React.createElement(SingleCardPdf, {
+      title: body.title || "Bingo Card",
+      sponsorName: body.sponsorName || "",
+      bannerImageUrl: body.bannerImageUrl || "",
+      sponsorLogoUrl: body.sponsorLogoUrl || "",
+      card: body.card,
+    });
 
-    const out = await pdf(doc).toBuffer(); // Node Buffer
+    const out = await (pdf(doc) as any).toBuffer(); // Buffer on node
     const bytes = new Uint8Array(out);
 
     const filename = `${sanitizeFilename(body.title || "bingo-card")}-${body.card.id}.pdf`;
