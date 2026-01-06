@@ -22,6 +22,7 @@ type GeneratedPack = {
 
 const SHARED_POOL_KEY = "grower-bingo:pool:v1";
 const LAST_GENERATED_PACK_KEY = "grower-bingo:lastGeneratedPack:v1";
+const LAST_PACK_KEY = "grower-bingo:lastPackId:v1";
 
 const DEFAULT_ITEMS = `Trellis net
 Lollipop
@@ -96,7 +97,7 @@ KoolBloom week
 Transition stretch
 Week 3 frost
 Week 6 swell
-Flower fade 
+Flower fade
 Sugar leaves
 Leaf strip
 LST tie-down
@@ -170,11 +171,7 @@ function downloadBase64Pdf(filename: string, base64: string) {
   }, 1500);
 }
 
-function downloadTextFile(
-  filename: string,
-  text: string,
-  mime = "text/plain;charset=utf-8"
-) {
+function downloadTextFile(filename: string, text: string, mime = "text/plain;charset=utf-8") {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -215,6 +212,10 @@ function downloadJsonFile(filename: string, obj: unknown) {
   downloadTextFile(filename, text, "application/json;charset=utf-8");
 }
 
+function resolvePackIdFromResponse(data: any) {
+  return data?.cardsPack?.packId || data?.requestKey || `pack_${Date.now()}`;
+}
+
 export default function Page() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
@@ -246,6 +247,10 @@ export default function Page() {
       const restored = JSON.parse(raw) as GeneratedPack;
       if (restored?.pdfBase64 && restored?.requestKey) {
         setPack(restored);
+        // Keep global lastPackId aligned with restored pack too
+        try {
+          window.localStorage.setItem(LAST_PACK_KEY, restored.requestKey);
+        } catch {}
       }
     } catch {
       // ignore
@@ -318,11 +323,18 @@ export default function Page() {
         return;
       }
 
+      const resolvedPackId = resolvePackIdFromResponse(data);
+
+      // ALWAYS update the active packId for Caller/Winners
+      try {
+        window.localStorage.setItem(LAST_PACK_KEY, resolvedPackId);
+      } catch {}
+
       const nextPack: GeneratedPack = {
         pdfBase64: data.pdfBase64,
         csv: data.csv || "",
         createdAt: data.createdAt || Date.now(),
-        requestKey: data.requestKey || String(Date.now()),
+        requestKey: resolvedPackId,
         usedItems: data.usedItems,
         cardsPack: data.cardsPack,
       };
@@ -330,36 +342,28 @@ export default function Page() {
       setPack(nextPack);
 
       try {
-        window.localStorage.setItem(
-          LAST_GENERATED_PACK_KEY,
-          JSON.stringify(nextPack)
-        );
+        window.localStorage.setItem(LAST_GENERATED_PACK_KEY, JSON.stringify(nextPack));
       } catch {
         // ignore
       }
 
-      if (data?.cardsPack?.packId) {
-        try {
-          const packId = data.cardsPack.packId;
+      // Store pack payload under the resolved packId (even if cardsPack is missing)
+      try {
+        const storedPack = {
+          ...(data.cardsPack || {}),
+          packId: resolvedPackId,
+          createdAt: data.createdAt || Date.now(),
+          title,
+          sponsorName,
+          weeklyPool:
+            Array.isArray(data.usedItems) && data.usedItems.length ? data.usedItems : poolLines,
+          usedItems: Array.isArray(data.usedItems) ? data.usedItems : [],
+          cards: data?.cardsPack?.cards || [],
+        };
 
-          window.localStorage.setItem("grower-bingo:lastPackId:v1", packId);
-
-          const storedPack = {
-            ...data.cardsPack,
-            weeklyPool:
-              Array.isArray(data.usedItems) && data.usedItems.length
-                ? data.usedItems
-                : poolLines,
-            usedItems: Array.isArray(data.usedItems) ? data.usedItems : [],
-          };
-
-          window.localStorage.setItem(
-            `grower-bingo:pack:${packId}`,
-            JSON.stringify(storedPack)
-          );
-        } catch {
-          // ignore
-        }
+        window.localStorage.setItem(`grower-bingo:pack:${resolvedPackId}`, JSON.stringify(storedPack));
+      } catch {
+        // ignore
       }
 
       if (Array.isArray(data.usedItems) && data.usedItems.length) {
@@ -370,7 +374,7 @@ export default function Page() {
         }
       }
 
-      const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
+      const filename = `${safeFileName(title)}-${resolvedPackId}.pdf`;
 
       setTimeout(() => {
         try {
@@ -414,10 +418,9 @@ export default function Page() {
   }
 
   function openWinners() {
-    const packId = pack?.cardsPack?.packId || pack?.requestKey;
+    const packId = pack?.requestKey || pack?.cardsPack?.packId;
     if (!packId) return;
-    const url = `/winners/${encodeURIComponent(packId)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(`/winners/${encodeURIComponent(packId)}`, "_blank", "noopener,noreferrer");
   }
 
   function openSinglePicker() {
@@ -450,9 +453,7 @@ export default function Page() {
           `<html><head><title>Preparing download…</title></head><body style="font-family:system-ui;padding:16px">Preparing your PDF…</body></html>`
         );
         w.document.close();
-      } catch {
-        // ignore cross-origin quirks
-      }
+      } catch {}
     }
 
     try {
@@ -463,6 +464,7 @@ export default function Page() {
           title,
           sponsorName,
           bannerImageUrl,
+          sponsorLogoUrl,
           card,
         }),
       });
@@ -486,7 +488,6 @@ export default function Page() {
 
       const blob = await res.blob();
 
-      // sanity check: if API returns HTML/JSON, this will often be tiny
       if (blob.size < 500) {
         const t = await blob.text().catch(() => "");
         if (w) {
@@ -494,33 +495,26 @@ export default function Page() {
             w.close();
           } catch {}
         }
-        setError(
-          `Single card download returned tiny file (${blob.size}). ${t.slice(0, 200)}`
-        );
+        setError(`Single card download returned tiny file (${blob.size}). ${t.slice(0, 200)}`);
         return;
       }
 
       const filename = `bingo-card-${card.id}.pdf`;
-
       const blobUrl = URL.createObjectURL(blob);
 
       if (w) {
-        // Navigate the opened tab to the blob URL (works better on Android)
         try {
           w.location.href = blobUrl;
         } catch {
-          // fallback
           downloadBlob(filename, blob);
         }
 
-        // revoke later (Android)
         setTimeout(() => {
           try {
             URL.revokeObjectURL(blobUrl);
           } catch {}
         }, 5000);
       } else {
-        // Popup blocked: fallback to anchor download
         downloadBlob(filename, blob);
         setTimeout(() => {
           try {
@@ -554,19 +548,10 @@ export default function Page() {
     >
       <h1 style={{ marginTop: 0, fontSize: 32 }}>Grower Bingo Generator</h1>
 
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 12,
-          padding: 16,
-          marginBottom: 16,
-        }}
-      >
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "grid", gap: 12 }}>
           <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
-              Pack title
-            </label>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Pack title</label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -581,9 +566,7 @@ export default function Page() {
           </div>
 
           <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
-              Sponsor name
-            </label>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Sponsor name</label>
             <input
               value={sponsorName}
               onChange={(e) => setSponsorName(e.target.value)}
@@ -614,8 +597,7 @@ export default function Page() {
               }}
             />
             <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep
-              this value unchanged.
+              Weekly swap: replace <b>public/banners/current.png</b> in GitHub. Keep this value unchanged.
             </div>
           </div>
 
@@ -638,9 +620,7 @@ export default function Page() {
           </div>
 
           <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
-              Quantity (1–500)
-            </label>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Quantity (1–500)</label>
             <input
               value={qtyInput}
               onChange={(e) => setQtyInput(e.target.value)}
@@ -657,14 +637,7 @@ export default function Page() {
           </div>
 
           <div>
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
+            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ fontWeight: 700 }}>
                 Square pool items (one per line, need 24+). Current: {poolCount}
               </div>
@@ -693,8 +666,7 @@ export default function Page() {
                 borderRadius: 10,
                 border: "1px solid #d1d5db",
                 padding: 12,
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                 fontSize: 14,
               }}
             />
@@ -783,17 +755,13 @@ export default function Page() {
 
             <button
               onClick={openWinners}
-              disabled={!pack?.cardsPack?.packId && !pack?.requestKey}
+              disabled={!pack?.requestKey && !pack?.cardsPack?.packId}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background:
-                  !pack?.cardsPack?.packId && !pack?.requestKey ? "#9ca3af" : "white",
-                cursor:
-                  !pack?.cardsPack?.packId && !pack?.requestKey
-                    ? "not-allowed"
-                    : "pointer",
+                background: !pack?.requestKey && !pack?.cardsPack?.packId ? "#9ca3af" : "white",
+                cursor: !pack?.requestKey && !pack?.cardsPack?.packId ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
@@ -816,11 +784,7 @@ export default function Page() {
             </a>
           </div>
 
-          {error ? (
-            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>
-              {error}
-            </div>
-          ) : null}
+          {error ? <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div> : null}
           {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
@@ -871,9 +835,7 @@ export default function Page() {
             </div>
 
             <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-              <div style={{ fontSize: 13, color: "#6b7280" }}>
-                Select a Card ID from this pack.
-              </div>
+              <div style={{ fontSize: 13, color: "#6b7280" }}>Select a Card ID from this pack.</div>
 
               <select
                 value={singleCardId}
@@ -910,8 +872,7 @@ export default function Page() {
               </button>
 
               <div style={{ fontSize: 12, color: "#6b7280" }}>
-                If you do not see a download, your browser may be blocking popups.
-                Allow popups for this site and try again.
+                If you do not see a download, your browser may be blocking popups. Allow popups for this site and try again.
               </div>
             </div>
           </div>
@@ -919,4 +880,4 @@ export default function Page() {
       ) : null}
     </div>
   );
-}
+                }
