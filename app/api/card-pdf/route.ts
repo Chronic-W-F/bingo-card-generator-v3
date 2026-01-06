@@ -1,11 +1,10 @@
+// app/api/card-pdf/route.ts
 import { NextResponse } from "next/server";
-import React from "react";
 import { pdf } from "@react-pdf/renderer";
-import { SingleCardPdf } from "@/pdf/SingleCardPdf";
+import React from "react";
+import SingleCardPdf from "@/pdf/SingleCardPdf";
 
-// IMPORTANT: react-pdf must run in Node.js on Vercel
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export const runtime = "nodejs"; // IMPORTANT for Buffer + react-pdf
 
 type BingoCard = { id: string; grid: string[][] };
 
@@ -18,58 +17,45 @@ type Body = {
 };
 
 function sanitizeFilename(name: string) {
-  const base = (name || "")
-    .replace(/[/\\?%*:|"<>]/g, "-")
+  return (name || "")
+    .replace(/[^\w\- ]+/g, "")
+    .trim()
     .replace(/\s+/g, "_")
-    .trim();
-  return base || "bingo-card.pdf";
-}
-
-function bufferToStream(buf: Buffer): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(buf));
-      controller.close();
-    },
-  });
+    .slice(0, 80) || "bingo-card";
 }
 
 export async function POST(req: Request) {
-  let body: Body | null = null;
-
   try {
-    body = (await req.json()) as Body;
+    const body = (await req.json()) as Body;
 
-    if (!body?.card?.id || !Array.isArray(body.card.grid)) {
+    if (!body?.card?.id || !Array.isArray(body?.card?.grid)) {
       return NextResponse.json(
-        { error: "Invalid payload. Missing card.id or card.grid." },
+        { error: "Missing card data (id/grid)." },
         { status: 400 }
       );
     }
 
-    const doc = (
-      <SingleCardPdf
-        title={body.title || "Bingo Card"}
-        sponsorName={body.sponsorName || ""}
-        bannerImageUrl={body.bannerImageUrl || ""}
-        sponsorLogoUrl={body.sponsorLogoUrl || ""}
-        card={body.card}
-      />
-    );
+    // ✅ NO JSX HERE: use React.createElement
+    const element = React.createElement(SingleCardPdf, {
+      title: body.title || "Bingo Card",
+      sponsorName: body.sponsorName || "",
+      bannerImageUrl: body.bannerImageUrl || "",
+      sponsorLogoUrl: body.sponsorLogoUrl || "",
+      card: body.card,
+    });
 
-    // react-pdf on Node: returns a Buffer
-    const buf = await pdf(doc).toBuffer();
+    const buf = await pdf(element).toBuffer();
 
     if (!buf || buf.length < 500) {
       return NextResponse.json(
-        { error: `PDF render returned too few bytes (${buf?.length ?? 0}).` },
+        { error: `PDF render returned tiny buffer (${buf?.length ?? 0}).` },
         { status: 500 }
       );
     }
 
-    const filename = sanitizeFilename(`bingo-card-${body.card.id}.pdf`);
+    const filename = `${sanitizeFilename(body.card.id)}.pdf`;
 
-    return new Response(bufferToStream(buf), {
+    return new Response(buf, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
@@ -77,13 +63,9 @@ export async function POST(req: Request) {
         "Cache-Control": "no-store",
       },
     });
-  } catch (err: any) {
-    const message = err?.message ? String(err.message) : String(err);
+  } catch (e: any) {
     return NextResponse.json(
-      {
-        error: "card-pdf crashed",
-        message,
-      },
+      { error: e?.message || "card-pdf failed" },
       { status: 500 }
     );
   }
