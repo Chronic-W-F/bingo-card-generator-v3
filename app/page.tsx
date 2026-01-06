@@ -97,7 +97,7 @@ KoolBloom week
 Transition stretch
 Week 3 frost
 Week 6 swell
-Flower fade
+Flower fade 
 Sugar leaves
 Leaf strip
 LST tie-down
@@ -163,7 +163,6 @@ function downloadBase64Pdf(filename: string, base64: string) {
   a.click();
   a.remove();
 
-  // Android Chrome: do not revoke immediately
   setTimeout(() => {
     try {
       URL.revokeObjectURL(url);
@@ -187,40 +186,46 @@ function downloadTextFile(filename: string, text: string, mime = "text/plain;cha
   }, 1500);
 }
 
-function downloadBlob(filename: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.rel = "noopener";
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-
-  setTimeout(() => {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {}
-    try {
-      a.remove();
-    } catch {}
-  }, 1500);
-}
-
 function downloadJsonFile(filename: string, obj: unknown) {
   const text = JSON.stringify(obj, null, 2);
   downloadTextFile(filename, text, "application/json;charset=utf-8");
 }
 
-function resolvePackIdFromResponse(data: any) {
-  return data?.cardsPack?.packId || data?.requestKey || `pack_${Date.now()}`;
+function syncPackToLocalStorage(restored: GeneratedPack) {
+  try {
+    const packId = restored?.cardsPack?.packId || restored?.requestKey;
+    if (!packId) return;
+
+    // This is the key Caller/Winners rely on
+    window.localStorage.setItem(LAST_PACK_KEY, packId);
+
+    // Store pack detail for winners page use (if you do)
+    if (restored.cardsPack?.cards?.length) {
+      const storedPack = {
+        ...restored.cardsPack,
+        weeklyPool:
+          Array.isArray(restored.usedItems) && restored.usedItems.length
+            ? restored.usedItems
+            : [],
+        usedItems: Array.isArray(restored.usedItems) ? restored.usedItems : [],
+      };
+      window.localStorage.setItem(`grower-bingo:pack:${packId}`, JSON.stringify(storedPack));
+    }
+
+    // Option B sync: caller pool becomes usedItems (actual squares on cards)
+    if (Array.isArray(restored.usedItems) && restored.usedItems.length) {
+      window.localStorage.setItem(SHARED_POOL_KEY, restored.usedItems.join("\n"));
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export default function Page() {
   const [title, setTitle] = useState("Harvest Heroes Bingo");
   const [sponsorName, setSponsorName] = useState("Joe’s Grows");
 
-  // Locked default: always use /banners/current.png
+  // Locked default banner path
   const [bannerImageUrl, setBannerImageUrl] = useState("/banners/current.png");
 
   const [sponsorLogoUrl, setSponsorLogoUrl] = useState("");
@@ -232,7 +237,7 @@ export default function Page() {
   const [error, setError] = useState<string>("");
   const [info, setInfo] = useState<string>("");
 
-  // Single-card download UI
+  // single-card picker UI
   const [singleOpen, setSingleOpen] = useState(false);
   const [singleCardId, setSingleCardId] = useState<string>("");
   const [isSingleDownloading, setIsSingleDownloading] = useState(false);
@@ -240,6 +245,7 @@ export default function Page() {
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
 
+  // Restore last generated pack AND re-sync lastPackId so Caller/Winners follow it
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(LAST_GENERATED_PACK_KEY);
@@ -247,16 +253,14 @@ export default function Page() {
       const restored = JSON.parse(raw) as GeneratedPack;
       if (restored?.pdfBase64 && restored?.requestKey) {
         setPack(restored);
-        // Keep global lastPackId aligned with restored pack too
-        try {
-          window.localStorage.setItem(LAST_PACK_KEY, restored.requestKey);
-        } catch {}
+        syncPackToLocalStorage(restored);
       }
     } catch {
       // ignore
     }
   }, []);
 
+  // Keep the editable pool saved (this is NOT Option B, just convenience)
   useEffect(() => {
     try {
       window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
@@ -290,12 +294,6 @@ export default function Page() {
       return;
     }
 
-    try {
-      window.localStorage.setItem(SHARED_POOL_KEY, poolLines.join("\n"));
-    } catch {
-      // ignore
-    }
-
     setIsGenerating(true);
     try {
       const res = await fetch("/api/generate", {
@@ -323,18 +321,11 @@ export default function Page() {
         return;
       }
 
-      const resolvedPackId = resolvePackIdFromResponse(data);
-
-      // ALWAYS update the active packId for Caller/Winners
-      try {
-        window.localStorage.setItem(LAST_PACK_KEY, resolvedPackId);
-      } catch {}
-
       const nextPack: GeneratedPack = {
         pdfBase64: data.pdfBase64,
         csv: data.csv || "",
         createdAt: data.createdAt || Date.now(),
-        requestKey: resolvedPackId,
+        requestKey: data.requestKey || String(Date.now()),
         usedItems: data.usedItems,
         cardsPack: data.cardsPack,
       };
@@ -347,25 +338,28 @@ export default function Page() {
         // ignore
       }
 
-      // Store pack payload under the resolved packId (even if cardsPack is missing)
+      // CRITICAL: update lastPackId every time you generate
       try {
-        const storedPack = {
-          ...(data.cardsPack || {}),
-          packId: resolvedPackId,
-          createdAt: data.createdAt || Date.now(),
-          title,
-          sponsorName,
-          weeklyPool:
-            Array.isArray(data.usedItems) && data.usedItems.length ? data.usedItems : poolLines,
-          usedItems: Array.isArray(data.usedItems) ? data.usedItems : [],
-          cards: data?.cardsPack?.cards || [],
-        };
+        const packId = data?.cardsPack?.packId || nextPack.requestKey;
+        window.localStorage.setItem(LAST_PACK_KEY, packId);
 
-        window.localStorage.setItem(`grower-bingo:pack:${resolvedPackId}`, JSON.stringify(storedPack));
+        if (data?.cardsPack?.packId) {
+          const storedPack = {
+            ...data.cardsPack,
+            weeklyPool:
+              Array.isArray(data.usedItems) && data.usedItems.length
+                ? data.usedItems
+                : poolLines,
+            usedItems: Array.isArray(data.usedItems) ? data.usedItems : [],
+          };
+
+          window.localStorage.setItem(`grower-bingo:pack:${packId}`, JSON.stringify(storedPack));
+        }
       } catch {
         // ignore
       }
 
+      // Option B: caller pool becomes union-of-items-on-cards
       if (Array.isArray(data.usedItems) && data.usedItems.length) {
         try {
           window.localStorage.setItem(SHARED_POOL_KEY, data.usedItems.join("\n"));
@@ -374,14 +368,12 @@ export default function Page() {
         }
       }
 
-      const filename = `${safeFileName(title)}-${resolvedPackId}.pdf`;
+      const filename = `${safeFileName(title)}-${nextPack.requestKey}.pdf`;
 
       setTimeout(() => {
         try {
           downloadBase64Pdf(filename, data.pdfBase64);
-          setInfo(
-            "PDF download triggered. If nothing happened, use the manual Download PDF button below."
-          );
+          setInfo("PDF download triggered.");
         } catch (e: any) {
           setError(e?.message || "Could not trigger PDF download.");
         }
@@ -418,9 +410,10 @@ export default function Page() {
   }
 
   function openWinners() {
-    const packId = pack?.requestKey || pack?.cardsPack?.packId;
+    const packId = pack?.cardsPack?.packId || pack?.requestKey;
     if (!packId) return;
-    window.open(`/winners/${encodeURIComponent(packId)}`, "_blank", "noopener,noreferrer");
+    const url = `/winners/${encodeURIComponent(packId)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   function openSinglePicker() {
@@ -431,8 +424,6 @@ export default function Page() {
     setSingleOpen(true);
   }
 
-  // This version is the Android/Chrome safe path:
-  // Open a tab immediately (user gesture), then later navigate that tab to the Blob URL.
   async function downloadSingleCardPdf() {
     setError("");
     setInfo("");
@@ -445,7 +436,6 @@ export default function Page() {
 
     setIsSingleDownloading(true);
 
-    // Must happen immediately on click for Android Chrome
     const w = window.open("about:blank", "_blank", "noopener,noreferrer");
     if (w) {
       try {
@@ -464,64 +454,35 @@ export default function Page() {
           title,
           sponsorName,
           bannerImageUrl,
-          sponsorLogoUrl,
           card,
         }),
       });
 
-      const ct = res.headers.get("content-type") || "";
       if (!res.ok) {
         if (w) {
           try {
             w.close();
           } catch {}
         }
-        if (ct.includes("application/json")) {
-          const j = await res.json();
-          setError(j?.error || "Single card PDF failed.");
-        } else {
-          const t = await res.text();
-          setError(t || "Single card PDF failed.");
-        }
+        const j = await res.json().catch(() => null);
+        setError(j?.error || "Single card PDF failed.");
         return;
       }
 
       const blob = await res.blob();
-
-      if (blob.size < 500) {
-        const t = await blob.text().catch(() => "");
-        if (w) {
-          try {
-            w.close();
-          } catch {}
-        }
-        setError(`Single card download returned tiny file (${blob.size}). ${t.slice(0, 200)}`);
-        return;
-      }
-
-      const filename = `bingo-card-${card.id}.pdf`;
       const blobUrl = URL.createObjectURL(blob);
 
       if (w) {
         try {
           w.location.href = blobUrl;
-        } catch {
-          downloadBlob(filename, blob);
-        }
-
-        setTimeout(() => {
-          try {
-            URL.revokeObjectURL(blobUrl);
-          } catch {}
-        }, 5000);
-      } else {
-        downloadBlob(filename, blob);
-        setTimeout(() => {
-          try {
-            URL.revokeObjectURL(blobUrl);
-          } catch {}
-        }, 5000);
+        } catch {}
       }
+
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch {}
+      }, 5000);
 
       setInfo(`Downloaded single card: ${card.id}`);
       setSingleOpen(false);
@@ -548,10 +509,19 @@ export default function Page() {
     >
       <h1 style={{ marginTop: 0, fontSize: 32 }}>Grower Bingo Generator</h1>
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+      <div
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
         <div style={{ display: "grid", gap: 12 }}>
           <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Pack title</label>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+              Pack title
+            </label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -566,7 +536,9 @@ export default function Page() {
           </div>
 
           <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Sponsor name</label>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+              Sponsor name
+            </label>
             <input
               value={sponsorName}
               onChange={(e) => setSponsorName(e.target.value)}
@@ -620,7 +592,9 @@ export default function Page() {
           </div>
 
           <div>
-            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Quantity (1–500)</label>
+            <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+              Quantity (1–500)
+            </label>
             <input
               value={qtyInput}
               onChange={(e) => setQtyInput(e.target.value)}
@@ -637,7 +611,14 @@ export default function Page() {
           </div>
 
           <div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
               <div style={{ fontWeight: 700 }}>
                 Square pool items (one per line, need 24+). Current: {poolCount}
               </div>
@@ -666,7 +647,8 @@ export default function Page() {
                 borderRadius: 10,
                 border: "1px solid #d1d5db",
                 padding: 12,
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                 fontSize: 14,
               }}
             />
@@ -755,13 +737,15 @@ export default function Page() {
 
             <button
               onClick={openWinners}
-              disabled={!pack?.requestKey && !pack?.cardsPack?.packId}
+              disabled={!pack?.cardsPack?.packId && !pack?.requestKey}
               style={{
                 padding: "12px 16px",
                 borderRadius: 12,
                 border: "1px solid #111827",
-                background: !pack?.requestKey && !pack?.cardsPack?.packId ? "#9ca3af" : "white",
-                cursor: !pack?.requestKey && !pack?.cardsPack?.packId ? "not-allowed" : "pointer",
+                background:
+                  !pack?.cardsPack?.packId && !pack?.requestKey ? "#9ca3af" : "white",
+                cursor:
+                  !pack?.cardsPack?.packId && !pack?.requestKey ? "not-allowed" : "pointer",
                 minWidth: 220,
               }}
             >
@@ -784,12 +768,15 @@ export default function Page() {
             </a>
           </div>
 
-          {error ? <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>{error}</div> : null}
+          {error ? (
+            <div style={{ marginTop: 10, color: "#b91c1c", fontWeight: 600 }}>
+              {error}
+            </div>
+          ) : null}
           {info ? <div style={{ marginTop: 10, color: "#111827" }}>{info}</div> : null}
         </div>
       </div>
 
-      {/* Single-card picker modal */}
       {singleOpen ? (
         <div
           role="dialog"
@@ -835,7 +822,9 @@ export default function Page() {
             </div>
 
             <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-              <div style={{ fontSize: 13, color: "#6b7280" }}>Select a Card ID from this pack.</div>
+              <div style={{ fontSize: 13, color: "#6b7280" }}>
+                Select a Card ID from this pack.
+              </div>
 
               <select
                 value={singleCardId}
@@ -872,7 +861,8 @@ export default function Page() {
               </button>
 
               <div style={{ fontSize: 12, color: "#6b7280" }}>
-                If you do not see a download, your browser may be blocking popups. Allow popups for this site and try again.
+                If you do not see a download, your browser may be blocking popups.
+                Allow popups for this site and try again.
               </div>
             </div>
           </div>
@@ -880,4 +870,4 @@ export default function Page() {
       ) : null}
     </div>
   );
-                }
+}
