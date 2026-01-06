@@ -14,26 +14,52 @@ export async function downloadSingleCardPdf(payload: {
   sponsorLogoUrl?: string;
   card: BingoCard;
 }) {
-  const res = await fetch("/api/card-pdf", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  // ✅ CRITICAL: open tab immediately from user gesture
+  const popup = window.open("", "_blank");
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`card-pdf failed (${res.status}): ${text.slice(0, 200)}`);
+  try {
+    const res = await fetch("/api/card-pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`card-pdf failed (${res.status}): ${text.slice(0, 300)}`);
+    }
+
+    const blob = await res.blob();
+
+    // Safety check: if server returned HTML/JSON error
+    if (blob.size < 800) {
+      const t = await blob.text().catch(() => "");
+      throw new Error(
+        `card-pdf returned tiny blob (${blob.size}): ${t.slice(0, 300)}`
+      );
+    }
+
+    const url = URL.createObjectURL(blob);
+
+    if (popup && !popup.closed) {
+      // ✅ Navigate already-opened tab (Android-safe)
+      popup.location.href = url;
+
+      // Delay revoke or Android fails to load
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {}
+      }, 15000);
+    } else {
+      // Fallback (desktop / popup blocked)
+      downloadBlob(`bingo-card-${payload.card.id}.pdf`, blob);
+    }
+  } catch (err) {
+    // Close blank tab if something failed
+    try {
+      if (popup && !popup.closed) popup.close();
+    } catch {}
+    throw err;
   }
-
-  const blob = await res.blob();
-
-  // Android / Chrome safety check
-  if (blob.size < 500) {
-    const t = await blob.text().catch(() => "");
-    throw new Error(
-      `card-pdf returned tiny blob (${blob.size}): ${t.slice(0, 200)}`
-    );
-  }
-
-  downloadBlob(`bingo-card-${payload.card.id}.pdf`, blob);
 }
