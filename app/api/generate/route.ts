@@ -18,6 +18,7 @@ type ReqBody = {
   bannerImageUrl?: string; // "/banners/current.png" preferred
   sponsorLogoUrl?: string; // optional (not used in PDF yet unless your PDF supports it)
   qty?: number;
+  quantity?: number; // allow old/new client shapes
   items?: string[];
 };
 
@@ -32,9 +33,18 @@ function safeJsonParse(raw: string | undefined) {
 
 function normalizeItems(items: unknown): string[] {
   if (!Array.isArray(items)) return [];
-  return items
-    .map((x) => String(x ?? "").trim())
-    .filter(Boolean);
+  return items.map((x) => String(x ?? "").trim()).filter(Boolean);
+}
+
+function uniqCaseSensitive(items: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    if (seen.has(it)) continue;
+    seen.add(it);
+    out.push(it);
+  }
+  return out;
 }
 
 function clampQty(n: unknown) {
@@ -47,25 +57,30 @@ function toDataUri(mime: string, buf: Buffer) {
   return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
-async function loadBannerAsDataUri(bannerImageUrl?: string): Promise<string | undefined> {
+async function loadBannerAsDataUri(
+  bannerImageUrl?: string
+): Promise<string | undefined> {
   if (!bannerImageUrl) return undefined;
 
   // We only "guarantee" local banners in /public (your locked default)
   // Example: "/banners/current.png"
   if (bannerImageUrl.startsWith("/")) {
-    const abs = path.join(process.cwd(), "public", bannerImageUrl.replace(/^\//, ""));
+    const abs = path.join(
+      process.cwd(),
+      "public",
+      bannerImageUrl.replace(/^\//, "")
+    );
     try {
       const buf = await readFile(abs);
       // crude mime detection
       const lower = bannerImageUrl.toLowerCase();
-      const mime =
-        lower.endsWith(".png")
-          ? "image/png"
-          : lower.endsWith(".jpg") || lower.endsWith(".jpeg")
-          ? "image/jpeg"
-          : lower.endsWith(".webp")
-          ? "image/webp"
-          : "application/octet-stream";
+      const mime = lower.endsWith(".png")
+        ? "image/png"
+        : lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+        ? "image/jpeg"
+        : lower.endsWith(".webp")
+        ? "image/webp"
+        : "application/octet-stream";
 
       return toDataUri(mime, buf);
     } catch {
@@ -89,8 +104,6 @@ function getAdminApp() {
     throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_JSON env var.");
   }
 
-  // firebase-admin expects keys like projectId/clientEmail/privateKey
-  // Service account JSON may include snake_case fields.
   const projectId =
     process.env.FIREBASE_PROJECT_ID ||
     credsJson.projectId ||
@@ -117,7 +130,6 @@ function cardsToFirestore(cards: { id: string; grid: string[][] }[]) {
 
 function buildCsv(cards: { id: string; grid: string[][] }[]) {
   // Simple roster: Card ID + 25 squares (including center)
-  // If you want to exclude center later, we can.
   const header = ["card_id", ...Array.from({ length: 25 }, (_, i) => `sq_${i + 1}`)].join(",");
   const rows = cards.map((c) => {
     const flat = c.grid.flat().map((x) => `"${String(x).replace(/"/g, '""')}"`);
@@ -126,14 +138,28 @@ function buildCsv(cards: { id: string; grid: string[][] }[]) {
   return [header, ...rows].join("\n");
 }
 
+function newPackId() {
+  // ✅ Always unique per request, even on warm serverless instances
+  try {
+    // Node 18+ (Vercel) supports crypto.randomUUID()
+    return `pack_${crypto.randomUUID().slice(0, 12)}`;
+  } catch {
+    return `pack_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as ReqBody;
 
     const title = String(body.title ?? "Harvest Heroes Bingo");
     const sponsorName = String(body.sponsorName ?? "");
-    const qty = clampQty(body.qty);
-    const items = normalizeItems(body.items);
+
+    // accept qty or quantity
+    const qty = clampQty(body.qty ?? body.quantity);
+
+    // normalize + dedupe the pool
+    const items = uniqCaseSensitive(normalizeItems(body.items));
 
     if (items.length < 24) {
       return NextResponse.json(
@@ -144,6 +170,10 @@ export async function POST(req: Request) {
 
     // Create bingo pack (your lib controls uniqueness rules)
     const cardsPack = createBingoPack(items, qty);
+
+    // ✅ Force a new packId every time (prevents "sticky" packId bugs)
+    const forcedPackId = newPackId();
+    const forcedCreatedAt = Date.now();
 
     // Banner: read /public/banners/current.png and convert to data-uri
     const bannerDataUri = await loadBannerAsDataUri(body.bannerImageUrl);
@@ -161,14 +191,14 @@ export async function POST(req: Request) {
     const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
     const csv = buildCsv(cardsPack.cards);
 
-    // Save pack to Firestore (optional but you are using firebase-admin now)
+    // Save pack to Firestore
     const app = getAdminApp();
     const db = admin.firestore(app);
 
-    // Store a Firestore-safe shape
     const firestorePack = {
-      packId: cardsPack.packId,
-      createdAt: cardsPack.createdAt,
+      // ✅ store the forced pack id
+      packId: forcedPackId,
+      createdAt: forcedCreatedAt,
       title,
       sponsorName,
       usedItems: cardsPack.usedItems ?? [],
@@ -176,22 +206,23 @@ export async function POST(req: Request) {
       cards: cardsToFirestore(cardsPack.cards),
     };
 
-    await db.collection("bingoPacks").doc(cardsPack.packId).set(firestorePack, { merge: true });
+    // ✅ write using forced pack id, not the possibly-sticky one
+    await db.collection("bingoPacks").doc(forcedPackId).set(firestorePack, { merge: true });
 
     return NextResponse.json({
       ok: true,
       pdfBase64,
       csv,
-      createdAt: cardsPack.createdAt,
-      requestKey: cardsPack.packId,
+      createdAt: forcedCreatedAt,
+      // ✅ requestKey must match the pack id your UI stores/uses
+      requestKey: forcedPackId,
       usedItems: cardsPack.usedItems ?? [],
       cardsPack: {
-        packId: cardsPack.packId,
-        createdAt: cardsPack.createdAt,
+        // ✅ return the forced pack id so caller/winners follow the latest pack
+        packId: forcedPackId,
+        createdAt: forcedCreatedAt,
         title,
         sponsorName,
-        // Keep the original nested grid ONLY for localStorage use in the browser
-        // (Firestore-safe version is stored in DB)
         cards: cardsPack.cards,
       },
     });
