@@ -59,7 +59,10 @@ export async function GET(
   try {
     const packId = String(params.packId || "").trim();
     if (!packId) {
-      return NextResponse.json({ ok: false, error: "Missing packId." }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Missing packId." },
+        { status: 400 }
+      );
     }
 
     const app = getAdminApp();
@@ -67,18 +70,21 @@ export async function GET(
 
     const snap = await db.collection("bingoPacks").doc(packId).get();
     if (!snap.exists) {
-      return NextResponse.json({ ok: false, error: "Pack not found." }, { status: 404 });
+      return NextResponse.json(
+        { ok: false, error: "Pack not found." },
+        { status: 404 }
+      );
     }
 
     const data = snap.data() as any;
 
     const cards: FirestoreCard[] = Array.isArray(data.cards) ? data.cards : [];
     const cardsExpanded = cards.map((c) => ({
-      id: c.id,
+      id: String(c.id || ""),
       grid: unflattenGrid(Number(c.size || 5), Array.isArray(c.gridFlat) ? c.gridFlat : []),
     }));
 
-    // Return in the same shape your client expects
+    // ✅ Return the exact shape the client needs (including banner + logo)
     return NextResponse.json({
       ok: true,
       pack: {
@@ -86,10 +92,18 @@ export async function GET(
         createdAt: data.createdAt || Date.now(),
         title: data.title || "Harvest Heroes Bingo",
         sponsorName: data.sponsorName || "",
+
+        // ✅ NEW: so shared digital cards match PDF styling
+        bannerImageUrl: data.bannerImageUrl || "/banners/current.png",
+        sponsorLogoUrl: data.sponsorLogoUrl || "",
+
         cards: cardsExpanded,
       },
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Failed." }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message || "Failed." },
+      { status: 500 }
+    );
   }
 }
