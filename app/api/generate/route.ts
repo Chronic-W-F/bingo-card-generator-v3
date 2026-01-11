@@ -16,7 +16,7 @@ type ReqBody = {
   title?: string;
   sponsorName?: string;
   bannerImageUrl?: string; // "/banners/current.png" preferred
-  sponsorLogoUrl?: string; // optional (not used in PDF yet unless your PDF supports it)
+  sponsorLogoUrl?: string; // optional
   qty?: number;
   quantity?: number; // allow old/new client shapes
   items?: string[];
@@ -62,7 +62,7 @@ async function loadBannerAsDataUri(
 ): Promise<string | undefined> {
   if (!bannerImageUrl) return undefined;
 
-  // We only "guarantee" local banners in /public (your locked default)
+  // We "guarantee" local banners in /public (your locked default)
   // Example: "/banners/current.png"
   if (bannerImageUrl.startsWith("/")) {
     const abs = path.join(
@@ -72,7 +72,6 @@ async function loadBannerAsDataUri(
     );
     try {
       const buf = await readFile(abs);
-      // crude mime detection
       const lower = bannerImageUrl.toLowerCase();
       const mime = lower.endsWith(".png")
         ? "image/png"
@@ -129,7 +128,6 @@ function cardsToFirestore(cards: { id: string; grid: string[][] }[]) {
 }
 
 function buildCsv(cards: { id: string; grid: string[][] }[]) {
-  // Simple roster: Card ID + 25 squares (including center)
   const header = ["card_id", ...Array.from({ length: 25 }, (_, i) => `sq_${i + 1}`)].join(",");
   const rows = cards.map((c) => {
     const flat = c.grid.flat().map((x) => `"${String(x).replace(/"/g, '""')}"`);
@@ -139,9 +137,7 @@ function buildCsv(cards: { id: string; grid: string[][] }[]) {
 }
 
 function newPackId() {
-  // ✅ Always unique per request, even on warm serverless instances
   try {
-    // Node 18+ (Vercel) supports crypto.randomUUID()
     return `pack_${crypto.randomUUID().slice(0, 12)}`;
   } catch {
     return `pack_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
@@ -155,10 +151,12 @@ export async function POST(req: Request) {
     const title = String(body.title ?? "Harvest Heroes Bingo");
     const sponsorName = String(body.sponsorName ?? "");
 
-    // accept qty or quantity
+    // Store the PUBLIC banner path in Firestore so phones can render it
+    const bannerImageUrl = String(body.bannerImageUrl || "/banners/current.png");
+    const sponsorLogoUrl = String(body.sponsorLogoUrl || "");
+
     const qty = clampQty(body.qty ?? body.quantity);
 
-    // normalize + dedupe the pool
     const items = uniqCaseSensitive(normalizeItems(body.items));
 
     if (items.length < 24) {
@@ -168,17 +166,14 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create bingo pack (your lib controls uniqueness rules)
     const cardsPack = createBingoPack(items, qty);
 
-    // ✅ Force a new packId every time (prevents "sticky" packId bugs)
     const forcedPackId = newPackId();
     const forcedCreatedAt = Date.now();
 
-    // Banner: read /public/banners/current.png and convert to data-uri
-    const bannerDataUri = await loadBannerAsDataUri(body.bannerImageUrl);
+    // PDF banner: convert local /public path to a data-uri for reliability
+    const bannerDataUri = await loadBannerAsDataUri(bannerImageUrl);
 
-    // Render PDF buffer (no JSX in this file; use React.createElement)
     const pdfElement = React.createElement(BingoPackPdf as any, {
       cards: cardsPack.cards,
       title,
@@ -196,33 +191,42 @@ export async function POST(req: Request) {
     const db = admin.firestore(app);
 
     const firestorePack = {
-      // ✅ store the forced pack id
       packId: forcedPackId,
       createdAt: forcedCreatedAt,
       title,
       sponsorName,
+
+      // ✅ NEW: persist these so digital cards match PDF week-to-week
+      bannerImageUrl,   // keep PUBLIC url/path here
+      sponsorLogoUrl,
+
       usedItems: cardsPack.usedItems ?? [],
       weeklyPool: cardsPack.weeklyPool ?? [],
       cards: cardsToFirestore(cardsPack.cards),
     };
 
-    // ✅ write using forced pack id, not the possibly-sticky one
-    await db.collection("bingoPacks").doc(forcedPackId).set(firestorePack, { merge: true });
+    await db
+      .collection("bingoPacks")
+      .doc(forcedPackId)
+      .set(firestorePack, { merge: true });
 
     return NextResponse.json({
       ok: true,
       pdfBase64,
       csv,
       createdAt: forcedCreatedAt,
-      // ✅ requestKey must match the pack id your UI stores/uses
       requestKey: forcedPackId,
       usedItems: cardsPack.usedItems ?? [],
       cardsPack: {
-        // ✅ return the forced pack id so caller/winners follow the latest pack
         packId: forcedPackId,
         createdAt: forcedCreatedAt,
         title,
         sponsorName,
+
+        // ✅ NEW: return these so localStorage pack has them too
+        bannerImageUrl,
+        sponsorLogoUrl,
+
         cards: cardsPack.cards,
       },
     });
