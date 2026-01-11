@@ -13,6 +13,11 @@ type CardsPack = {
   createdAt: number;
   title?: string;
   sponsorName?: string;
+
+  // ✅ NEW: saved in Firestore + returned by /api/packs
+  bannerImageUrl?: string;
+  sponsorLogoUrl?: string;
+
   cards: BingoCard[];
 };
 
@@ -100,7 +105,7 @@ export default function CardPage({
     setMarks(loadMarks(packId, cardId));
   }, [packId, cardId]);
 
-  // Load pack+card (NO device lock)
+  // Load pack+card (share links work because API is source of truth)
   useEffect(() => {
     let cancelled = false;
 
@@ -122,7 +127,6 @@ export default function CardPage({
           setPack(local);
           setCard(found);
         }
-        // If found, we can still background-refresh, but not required.
       }
 
       // 2) Always fetch from API (source of truth for share links)
@@ -130,7 +134,9 @@ export default function CardPage({
       if (cancelled) return;
 
       if (!remote) {
-        setError("Could not load this pack from the server. The link may be wrong or the pack no longer exists.");
+        setError(
+          "Could not load this pack from the server. The link may be wrong or the pack no longer exists."
+        );
         setPack(null);
         setCard(null);
         setLoading(false);
@@ -162,6 +168,7 @@ export default function CardPage({
 
   const title = pack?.title || "Harvest Heroes Bingo";
   const sponsorName = pack?.sponsorName || "Joe’s Grows";
+  const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
 
   const size = card?.grid?.length || 5;
   const center = Math.floor(size / 2);
@@ -171,7 +178,6 @@ export default function CardPage({
   }, [card]);
 
   function toggleMark(r: number, c: number) {
-    // Center is always free/marked
     if (r === center && c === center) return;
 
     const k = cellKey(r, c);
@@ -187,7 +193,6 @@ export default function CardPage({
     saveMarks(packId, cardId, {});
   }
 
-  // Always treat center as marked for UI
   function isMarked(r: number, c: number) {
     if (r === center && c === center) return true;
     return !!marks[cellKey(r, c)];
@@ -233,9 +238,7 @@ export default function CardPage({
           }}
         >
           <div style={{ fontWeight: 800, marginBottom: 6 }}>This card could not be loaded.</div>
-          <div style={{ color: "#6b7280", fontSize: 14 }}>
-            {error || "Unknown error."}
-          </div>
+          <div style={{ color: "#6b7280", fontSize: 14 }}>{error || "Unknown error."}</div>
           <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
             PackId: <b>{packId || "(missing)"}</b> • CardId: <b>{cardId || "(missing)"}</b>
           </div>
@@ -253,12 +256,43 @@ export default function CardPage({
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+      {/* Banner (matches PDF weekly banner) */}
+      <div
+        style={{
+          borderRadius: 18,
+          overflow: "hidden",
+          border: "1px solid rgba(255,255,255,0.12)",
+          marginBottom: 12,
+          background: "rgba(255,255,255,0.06)",
+        }}
+      >
+        <img
+          src={bannerUrl}
+          alt="Weekly banner"
+          style={{
+            width: "100%",
+            height: "clamp(70px, 14vw, 110px)",
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "flex-start",
+        }}
+      >
         <div>
-          <h1 style={{ marginTop: 0, marginBottom: 6 }}>{title}</h1>
-          <div style={{ color: "#6b7280" }}>Sponsor: {sponsorName}</div>
-          <div style={{ marginTop: 6, fontSize: 14 }}>
-            Card ID: <b>{card.id}</b>
+          <h1 style={{ marginTop: 0, marginBottom: 6, fontSize: 34, letterSpacing: -0.6 }}>
+            {title}
+          </h1>
+          <div style={{ color: "#9ca3af", fontSize: 16 }}>Sponsor: {sponsorName}</div>
+          <div style={{ marginTop: 6, fontSize: 16, color: "#e5e7eb" }}>
+            Card ID: <b style={{ color: "white" }}>{card.id}</b>
           </div>
         </div>
 
@@ -267,11 +301,13 @@ export default function CardPage({
           style={{
             padding: "10px 14px",
             borderRadius: 12,
-            border: "1px solid #111827",
-            background: "white",
+            border: "1px solid rgba(255,255,255,0.18)",
+            background: "rgba(255,255,255,0.06)",
+            color: "white",
             cursor: "pointer",
             height: 42,
             alignSelf: "flex-start",
+            backdropFilter: "blur(10px)",
           }}
         >
           Clear marks
@@ -281,11 +317,11 @@ export default function CardPage({
       <div
         style={{
           marginTop: 14,
-          borderRadius: 20,
-          border: "1px solid #1f2937",
+          borderRadius: 22,
+          border: "1px solid rgba(16,185,129,0.28)",
           padding: 14,
-          background: "#0b1220",
-          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+          background: "radial-gradient(1200px 500px at 20% 0%, rgba(16,185,129,0.10), transparent 55%), #0b1220",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
         }}
       >
         <div
@@ -306,35 +342,40 @@ export default function CardPage({
                   onClick={() => toggleMark(r, c)}
                   style={{
                     borderRadius: 18,
-                    border: marked ? "1px solid rgba(16,185,129,0.6)" : "1px solid rgba(255,255,255,0.08)",
-                    background: marked ? "rgba(16,185,129,0.18)" : "rgba(255,255,255,0.06)",
+                    border: marked
+                      ? "1px solid rgba(16,185,129,0.65)"
+                      : "1px solid rgba(255,255,255,0.10)",
+                    background: marked
+                      ? "linear-gradient(180deg, rgba(16,185,129,0.22), rgba(16,185,129,0.12))"
+                      : "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.05))",
                     color: "white",
                     padding: 10,
-                    minHeight: 72,
+                    aspectRatio: "1 / 1",
                     textAlign: "center",
                     cursor: isCenter ? "default" : "pointer",
                     display: "grid",
                     placeItems: "center",
                     position: "relative",
                     overflow: "hidden",
+                    boxShadow: marked ? "0 0 0 2px rgba(16,185,129,0.10) inset" : "none",
                   }}
                 >
                   <div
                     style={{
-                      fontWeight: 800,
-                      fontSize: 16,
+                      fontWeight: 900,
+                      fontSize: "clamp(12px, 2.7vw, 16px)",
                       lineHeight: 1.05,
-                      wordBreak: "break-word",
                       paddingInline: 6,
+                      wordBreak: "break-word",
+                      overflowWrap: "anywhere",
+                      textWrap: "balance" as any,
                     }}
                   >
                     {label}
                   </div>
 
                   {isCenter ? (
-                    <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                      FREE
-                    </div>
+                    <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>FREE</div>
                   ) : null}
 
                   {marked && !isCenter ? (
@@ -345,15 +386,16 @@ export default function CardPage({
                         display: "grid",
                         placeItems: "center",
                         pointerEvents: "none",
-                        opacity: 0.9,
+                        opacity: 0.92,
                       }}
                     >
                       <div
                         style={{
                           fontSize: 44,
-                          fontWeight: 900,
+                          fontWeight: 950,
                           transform: "rotate(-12deg)",
-                          color: "rgba(255,255,255,0.85)",
+                          color: "rgba(255,255,255,0.86)",
+                          textShadow: "0 6px 18px rgba(0,0,0,0.35)",
                         }}
                       >
                         ✓
@@ -366,7 +408,15 @@ export default function CardPage({
           )}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: 12,
+            color: "rgba(255,255,255,0.55)",
+            fontSize: 12,
+          }}
+        >
           <div>Grower Bingo</div>
           <div>Center is FREE</div>
         </div>
