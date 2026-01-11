@@ -1,3 +1,4 @@
+// app/card/[packId]/[cardId]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -15,89 +16,67 @@ type CardsPack = {
   cards: BingoCard[];
 };
 
-function packStorageKey(packId: string) {
-  return `grower-bingo:pack:${packId}`;
-}
-
-function marksStorageKey(packId: string, cardId: string) {
-  return `grower-bingo:marks:${packId}:${cardId}`;
-}
-
-function loadPack(packId: string): CardsPack | null {
+function safeJsonParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(packStorageKey(packId));
-    if (!raw) return null;
-    return JSON.parse(raw) as CardsPack;
+    return JSON.parse(raw) as T;
   } catch {
     return null;
   }
 }
 
+function packStorageKey(packId: string) {
+  return `grower-bingo:pack:${packId}`;
+}
+
+function loadPackFromLocalStorage(packId: string): CardsPack | null {
+  return safeJsonParse<CardsPack>(window.localStorage.getItem(packStorageKey(packId)));
+}
+
+function savePackToLocalStorage(packId: string, pack: CardsPack) {
+  try {
+    window.localStorage.setItem(packStorageKey(packId), JSON.stringify(pack));
+  } catch {
+    // ignore
+  }
+}
+
+async function fetchPackFromApi(packId: string): Promise<CardsPack | null> {
+  try {
+    const res = await fetch(`/api/packs/${encodeURIComponent(packId)}`, { cache: "no-store" });
+    const data = await res.json();
+    if (!data?.ok || !data?.pack) return null;
+    return data.pack as CardsPack;
+  } catch {
+    return null;
+  }
+}
+
+function marksKey(packId: string, cardId: string) {
+  return `grower-bingo:marks:${packId}:${cardId}`;
+}
+
 function loadMarks(packId: string, cardId: string): Record<string, boolean> {
   try {
-    const raw = window.localStorage.getItem(marksStorageKey(packId, cardId));
+    const raw = window.localStorage.getItem(marksKey(packId, cardId));
     if (!raw) return {};
-    return JSON.parse(raw) as Record<string, boolean>;
+    const parsed = JSON.parse(raw) as Record<string, boolean>;
+    return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
   }
 }
 
-/**
- * Display-only shortening.
- * IMPORTANT: Do NOT change the underlying card.grid labels unless you also change
- * caller matching logic. This map only affects what players SEE.
- */
-const DISPLAY_LABEL_MAP: Record<string, string> = {
-  "Herm confirmed": "Herm confirm’d",
-  "Carbon filter swap": "Carbon swap",
-  "Potassium deficiency": "K def.",
-  "Phosphorus deficiency": "P def.",
-  "Magnesium deficiency": "Mg def.",
-  "Calcium deficiency": "Ca def.",
-  "Molybdenum deficiency": "Mo def.",
-  "Copper deficiency": "Cu def.",
-  "Sulfur deficiency": "S def.",
-  "pH swing": "pH swing",
-  "Res change day": "Res change",
-  "Overfed tips": "Overfed tips",
-  "Slime roots": "Slime roots",
-  "Bud stacking": "Bud stack",
-  "Bud rot": "Bud rot",
-  "Bud was h": "Bud wash", // if you have weird truncated items in pool, fix them at the source later
-  "Pistils orange": "Orange pistils",
-  "Chlorosis spreading": "Chlorosis",
-  "Stunted growth": "Stunted growth",
-  "Air pump fail": "Air pump fail",
-  "Flush debate": "Flush debate",
-  "H2O2 debate": "H2O2 debate",
-  "Pythium spreading": "Pythium",
-  "Leaf taco": "Leaf taco",
-  "Taco leaf": "Taco leaf",
-  "Tent zip open": "Zip open",
-  "Scope pics": "Scope pics",
-  "Stretch week": "Stretch week",
-  "Flower fade": "Fade",
-  "Beneficials added": "Bennies",
-  "Predator mites": "Pred mites",
-  "Spinosa talk": "Spinosad",
-  "Aircube flood cycle": "Aircube flood",
-};
-
-function displayLabel(raw: string) {
-  const s = String(raw ?? "").trim();
-  return DISPLAY_LABEL_MAP[s] ?? s;
+function saveMarks(packId: string, cardId: string, marks: Record<string, boolean>) {
+  try {
+    window.localStorage.setItem(marksKey(packId, cardId), JSON.stringify(marks));
+  } catch {
+    // ignore
+  }
 }
 
-// scale font based on display label length
-function fontSizeFor(label: string) {
-  const n = (label || "").trim().length;
-  if (n <= 9) return 16;
-  if (n <= 14) return 15;
-  if (n <= 20) return 14;
-  if (n <= 26) return 13;
-  if (n <= 34) return 12;
-  return 11;
+function cellKey(r: number, c: number) {
+  return `${r}_${c}`;
 }
 
 export default function CardPage({
@@ -105,343 +84,291 @@ export default function CardPage({
 }: {
   params: { packId: string; cardId: string };
 }) {
-  const { packId, cardId } = params;
+  const packId = String(params.packId || "").trim();
+  const cardId = String(params.cardId || "").trim();
 
   const [pack, setPack] = useState<CardsPack | null>(null);
+  const [card, setCard] = useState<BingoCard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>("");
+
   const [marks, setMarks] = useState<Record<string, boolean>>({});
-  const [isAdmin, setIsAdmin] = useState(false);
 
+  // Load marks on mount / packId change
   useEffect(() => {
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      setIsAdmin(sp.get("admin") === "1");
-    } catch {
-      setIsAdmin(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const p = loadPack(packId);
-    setPack(p);
+    if (!packId || !cardId) return;
     setMarks(loadMarks(packId, cardId));
   }, [packId, cardId]);
 
+  // Load pack+card (NO device lock)
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        marksStorageKey(packId, cardId),
-        JSON.stringify(marks)
-      );
-    } catch {
-      // ignore
-    }
-  }, [packId, cardId, marks]);
+    let cancelled = false;
 
-  const card = useMemo(() => {
-    return pack?.cards.find((c) => c.id === cardId) ?? null;
-  }, [pack, cardId]);
+    async function run() {
+      setLoading(true);
+      setError("");
+
+      if (!packId || !cardId) {
+        setError("Missing packId or cardId.");
+        setLoading(false);
+        return;
+      }
+
+      // 1) Try localStorage cache first (fast)
+      const local = loadPackFromLocalStorage(packId);
+      if (local && Array.isArray(local.cards)) {
+        const found = local.cards.find((c) => c.id === cardId) || null;
+        if (!cancelled) {
+          setPack(local);
+          setCard(found);
+        }
+        // If found, we can still background-refresh, but not required.
+      }
+
+      // 2) Always fetch from API (source of truth for share links)
+      const remote = await fetchPackFromApi(packId);
+      if (cancelled) return;
+
+      if (!remote) {
+        setError("Could not load this pack from the server. The link may be wrong or the pack no longer exists.");
+        setPack(null);
+        setCard(null);
+        setLoading(false);
+        return;
+      }
+
+      savePackToLocalStorage(packId, remote);
+
+      const found = remote.cards.find((c) => c.id === cardId) || null;
+      if (!found) {
+        setError("Card not found in this pack. The link may be wrong.");
+        setPack(remote);
+        setCard(null);
+        setLoading(false);
+        return;
+      }
+
+      setPack(remote);
+      setCard(found);
+      setLoading(false);
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [packId, cardId]);
 
   const title = pack?.title || "Harvest Heroes Bingo";
-  const sponsorName = pack?.sponsorName || "Joe's Grows";
+  const sponsorName = pack?.sponsorName || "Joe’s Grows";
 
-  function toggle(r: number, c: number) {
-    const key = `${r},${c}`;
-    setMarks((prev) => ({ ...prev, [key]: !prev[key] }));
+  const size = card?.grid?.length || 5;
+  const center = Math.floor(size / 2);
+
+  const grid = useMemo(() => {
+    return card?.grid || Array.from({ length: 5 }, () => Array.from({ length: 5 }, () => ""));
+  }, [card]);
+
+  function toggleMark(r: number, c: number) {
+    // Center is always free/marked
+    if (r === center && c === center) return;
+
+    const k = cellKey(r, c);
+    setMarks((prev) => {
+      const next = { ...prev, [k]: !prev[k] };
+      saveMarks(packId, cardId, next);
+      return next;
+    });
   }
 
   function clearMarks() {
     setMarks({});
+    saveMarks(packId, cardId, {});
   }
 
-  if (!pack || !card) {
+  // Always treat center as marked for UI
+  function isMarked(r: number, c: number) {
+    if (r === center && c === center) return true;
+    return !!marks[cellKey(r, c)];
+  }
+
+  if (loading) {
     return (
       <div
         style={{
-          maxWidth: 900,
+          maxWidth: 720,
           margin: "0 auto",
           padding: 16,
           fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
         }}
       >
-        <div style={{ fontSize: 28, fontWeight: 900, marginBottom: 10 }}>
-          {title}
-        </div>
-        <div style={{ color: "#6b7280", fontSize: 16, marginBottom: 18 }}>
-          Sponsor: {sponsorName}
-        </div>
+        <h1 style={{ marginTop: 0, marginBottom: 8 }}>{title}</h1>
+        <div style={{ color: "#6b7280" }}>Sponsor: {sponsorName}</div>
+        <div style={{ marginTop: 14 }}>Loading card...</div>
+      </div>
+    );
+  }
+
+  if (error || !pack || !card) {
+    return (
+      <div
+        style={{
+          maxWidth: 720,
+          margin: "0 auto",
+          padding: 16,
+          fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+        }}
+      >
+        <h1 style={{ marginTop: 0, marginBottom: 8 }}>{title}</h1>
+        <div style={{ color: "#6b7280" }}>Sponsor: {sponsorName}</div>
 
         <div
           style={{
-            padding: 14,
-            borderRadius: 14,
+            marginTop: 12,
             border: "1px solid #e5e7eb",
+            borderRadius: 14,
+            padding: 14,
             background: "white",
           }}
         >
-          <div style={{ fontWeight: 900, marginBottom: 8 }}>
-            This card is not available on this device.
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>This card could not be loaded.</div>
+          <div style={{ color: "#6b7280", fontSize: 14 }}>
+            {error || "Unknown error."}
           </div>
-          <div style={{ color: "#6b7280", fontSize: 13 }}>
-            Open the digital card link on the same phone you will use during the
-            game.
+          <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
+            PackId: <b>{packId || "(missing)"}</b> • CardId: <b>{cardId || "(missing)"}</b>
           </div>
         </div>
       </div>
     );
   }
 
-  const size = card.grid.length;
-  const center = Math.floor(size / 2);
-
   return (
     <div
       style={{
-        minHeight: "100vh",
+        maxWidth: 720,
+        margin: "0 auto",
         padding: 16,
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-        background:
-          "radial-gradient(900px 520px at 50% -120px, rgba(34,197,94,0.22), transparent 60%), #070b0f",
       }}
     >
-      <div style={{ maxWidth: 980, margin: "0 auto" }}>
-        <div
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div>
+          <h1 style={{ marginTop: 0, marginBottom: 6 }}>{title}</h1>
+          <div style={{ color: "#6b7280" }}>Sponsor: {sponsorName}</div>
+          <div style={{ marginTop: 6, fontSize: 14 }}>
+            Card ID: <b>{card.id}</b>
+          </div>
+        </div>
+
+        <button
+          onClick={clearMarks}
           style={{
-            borderRadius: 22,
-            padding: 18,
-            background: "rgba(10,15,22,0.78)",
-            border: "1px solid rgba(34,197,94,0.30)",
-            boxShadow:
-              "0 18px 60px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.06) inset",
+            padding: "10px 14px",
+            borderRadius: 12,
+            border: "1px solid #111827",
+            background: "white",
+            cursor: "pointer",
+            height: 42,
+            alignSelf: "flex-start",
           }}
         >
-          {/* Header */}
-          <div style={{ display: "grid", gap: 8 }}>
-            <div
-              style={{
-                fontSize: 34,
-                fontWeight: 950,
-                color: "white",
-                letterSpacing: 0.2,
-              }}
-            >
-              {title}
-            </div>
+          Clear marks
+        </button>
+      </div>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ color: "rgba(255,255,255,0.78)", fontSize: 16 }}>
-                Sponsor: <b style={{ color: "white" }}>{sponsorName}</b>
-              </div>
+      <div
+        style={{
+          marginTop: 14,
+          borderRadius: 20,
+          border: "1px solid #1f2937",
+          padding: 14,
+          background: "#0b1220",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
+            gap: 10,
+          }}
+        >
+          {grid.map((row, r) =>
+            row.map((label, c) => {
+              const marked = isMarked(r, c);
+              const isCenter = r === center && c === center;
 
-              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 16 }}>
-                •
-              </div>
-
-              <div style={{ color: "rgba(255,255,255,0.78)", fontSize: 16 }}>
-                Card ID: <b style={{ color: "white" }}>{cardId}</b>
-              </div>
-            </div>
-
-            {/* Admin-only nav (hidden from contestants by default) */}
-            {isAdmin ? (
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <a
-                  href="/"
+              return (
+                <button
+                  key={`${r}-${c}`}
+                  onClick={() => toggleMark(r, c)}
                   style={{
-                    padding: "10px 14px",
-                    borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,0.18)",
-                    background: "rgba(255,255,255,0.06)",
-                    textDecoration: "none",
+                    borderRadius: 18,
+                    border: marked ? "1px solid rgba(16,185,129,0.6)" : "1px solid rgba(255,255,255,0.08)",
+                    background: marked ? "rgba(16,185,129,0.18)" : "rgba(255,255,255,0.06)",
                     color: "white",
-                    fontWeight: 800,
+                    padding: 10,
+                    minHeight: 72,
+                    textAlign: "center",
+                    cursor: isCenter ? "default" : "pointer",
+                    display: "grid",
+                    placeItems: "center",
+                    position: "relative",
+                    overflow: "hidden",
                   }}
                 >
-                  Generator
-                </a>
-                <a
-                  href="/caller"
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,0.18)",
-                    background: "rgba(255,255,255,0.06)",
-                    textDecoration: "none",
-                    color: "white",
-                    fontWeight: 800,
-                  }}
-                >
-                  Caller
-                </a>
-                <a
-                  href={`/winners/${encodeURIComponent(packId)}`}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,0.18)",
-                    background: "rgba(255,255,255,0.06)",
-                    textDecoration: "none",
-                    color: "white",
-                    fontWeight: 800,
-                  }}
-                >
-                  Winners
-                </a>
-              </div>
-            ) : null}
+                  <div
+                    style={{
+                      fontWeight: 800,
+                      fontSize: 16,
+                      lineHeight: 1.05,
+                      wordBreak: "break-word",
+                      paddingInline: 6,
+                    }}
+                  >
+                    {label}
+                  </div>
 
-            {/* Only control contestants see */}
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                marginTop: 4,
-              }}
-            >
-              <button
-                onClick={clearMarks}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(255,255,255,0.18)",
-                  background: "rgba(255,255,255,0.06)",
-                  color: "white",
-                  cursor: "pointer",
-                  fontWeight: 900,
-                }}
-              >
-                Clear marks
-              </button>
-            </div>
-          </div>
+                  {isCenter ? (
+                    <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+                      FREE
+                    </div>
+                  ) : null}
 
-          {/* Grid */}
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              borderRadius: 18,
-              border: "1px solid rgba(255,255,255,0.08)",
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))",
-            }}
-          >
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
-                gap: 12,
-              }}
-            >
-              {card.grid.map((row, r) =>
-                row.map((rawLabel, c) => {
-                  const isCenter = r === center && c === center;
-                  const isMarked = !!marks[`${r},${c}`];
-
-                  const shown = isCenter ? rawLabel : displayLabel(rawLabel);
-
-                  return (
-                    <button
-                      key={`${r}-${c}`}
-                      onClick={() => toggle(r, c)}
-                      title={String(rawLabel ?? "").trim()} // long-press shows full text on most phones
+                  {marked && !isCenter ? (
+                    <div
                       style={{
-                        position: "relative",
-                        minHeight: 92,
-                        padding: 10,
-                        borderRadius: 18,
-                        border: isCenter
-                          ? "1px solid rgba(34,197,94,0.55)"
-                          : "1px solid rgba(255,255,255,0.14)",
-                        background: isCenter
-                          ? "rgba(34,197,94,0.14)"
-                          : "rgba(255,255,255,0.04)",
-                        cursor: "pointer",
-                        textAlign: "center",
-                        color: "white",
-                        overflow: "hidden",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        boxShadow: "0 10px 24px rgba(0,0,0,0.35)",
+                        position: "absolute",
+                        inset: 0,
+                        display: "grid",
+                        placeItems: "center",
+                        pointerEvents: "none",
+                        opacity: 0.9,
                       }}
                     >
                       <div
                         style={{
-                          fontSize: isCenter ? 14 : fontSizeFor(shown),
-                          fontWeight: 950,
-                          lineHeight: 1.05,
-                          padding: "0 4px",
-                          // The key changes to prevent ugly mid-word stacking:
-                          wordBreak: "keep-all",
-                          overflowWrap: "break-word", // only breaks if needed
-                          whiteSpace: "normal",
+                          fontSize: 44,
+                          fontWeight: 900,
+                          transform: "rotate(-12deg)",
+                          color: "rgba(255,255,255,0.85)",
                         }}
                       >
-                        {shown}
+                        ✓
                       </div>
+                    </div>
+                  ) : null}
+                </button>
+              );
+            })
+          )}
+        </div>
 
-                      {isCenter ? (
-                        <div
-                          style={{
-                            position: "absolute",
-                            bottom: 8,
-                            left: 0,
-                            right: 0,
-                            fontSize: 12,
-                            fontWeight: 950,
-                            color: "rgba(255,255,255,0.85)",
-                          }}
-                        >
-                          FREE
-                        </div>
-                      ) : null}
-
-                      {isMarked ? (
-                        <>
-                          <div
-                            aria-hidden
-                            style={{
-                              position: "absolute",
-                              inset: 0,
-                              borderRadius: 18,
-                              background: "rgba(34,197,94,0.22)",
-                            }}
-                          />
-                          <div
-                            aria-hidden
-                            style={{
-                              position: "absolute",
-                              fontSize: 46,
-                              fontWeight: 950,
-                              color: "rgba(255,255,255,0.92)",
-                              transform: "rotate(-10deg)",
-                              textShadow: "0 10px 30px rgba(0,0,0,0.65)",
-                            }}
-                          >
-                            ✓
-                          </div>
-                        </>
-                      ) : null}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Footer like PDF */}
-          <div
-            style={{
-              marginTop: 12,
-              display: "flex",
-              justifyContent: "space-between",
-              color: "rgba(255,255,255,0.45)",
-              fontSize: 12,
-            }}
-          >
-            <div>Grower Bingo</div>
-            <div>Center is FREE</div>
-          </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
+          <div>Grower Bingo</div>
+          <div>Center is FREE</div>
         </div>
       </div>
     </div>
