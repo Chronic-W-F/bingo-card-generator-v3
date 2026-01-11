@@ -25,6 +25,14 @@ const SHARED_POOL_KEY = "grower-bingo:pool:v1";
 const LAST_GENERATED_PACK_KEY = "grower-bingo:lastGeneratedPack:v1";
 const LAST_PACK_KEY = "grower-bingo:lastPackId:v1";
 
+/**
+ * Option A pool: short, obvious, caller-friendly.
+ * Rules:
+ * - Keep universal grow abbreviations (pH/EC/VPD/LED/IPM/LST/SCROG).
+ * - Use Def format for deficiencies (Cal Def, Mag Def, etc.). No element symbols.
+ * - Prefer 1–2 words, 3 max.
+ * - Replace overly-long/technical phrases with clear short tokens.
+ */
 const DEFAULT_ITEMS = `Trellis net
 Lollipop
 Defoliate
@@ -33,16 +41,21 @@ Dryback
 Runoff EC
 VPD off
 Heat stress
+Light burn
 Herm watch
 Foxtails
 Amber trichomes
 Cloudy trichomes
+Clear trichomes
 Flush debate
 Fire genetics
 Stunted growth
-Light burn
 Cal-Mag
 pH swing
+pH up
+pH down
+EC up
+EC down
 Overwatered
 Underwatered
 Powdery mildew
@@ -51,59 +64,67 @@ Bud rot
 Nute lockout
 Photos
 Taco leaves
-Clawing
-Nitrogen toxicity
-Magnesium deficiency
-Calcium deficiency
-Iron deficiency
-Potassium deficiency
-Phosphorus deficiency
-Sulfur deficiency
-Zinc deficiency
-Manganese deficiency
-Boron deficiency
-Copper deficiency
-Molybdenum deficiency
+Leaf claw
+Tip burn
+Nitro tox
+Chlorosis
+Sugar leaf curl
+
+Cal Def
+Mag Def
+Iron Def
+Potassium Def
+Phosphorus Def
+Sulfur Def
+Zinc Def
+Manganese Def
+Boron Def
+Copper Def
+Molybdenum Def
+
 Root rot
 Slime roots
 Brown roots
 White roots
 Pythium
 Algae bloom
+Biofilm
+Salt buildup
+
 Light leak
 Timer fail
 Pump fail
 Air pump fail
 Airstone clogged
-Low dissolved oxygen
+Low oxygen
 Water temp high
 Water temp low
-pH drift up
-pH drift down
-EC drift up
-EC drift down
-Res top-off
-Res change day
-Bubble bucket
-Aircube flood cycle
 Drain clog
 Overflow scare
-Salt buildup
-Biofilm
-Beneficials added
+
+Res top-off
+Res change
+Water change
+Hydro
+Soil
+Aircube
+Bubble bucket
+
+Beneficials
 H2O2 debate
 Silica added
 PK boost
 KoolBloom week
-Transition stretch
+
+Transition
 Week 3 frost
 Week 6 swell
-Flower fade 
+Flower fade
 Sugar leaves
 Leaf strip
-LST tie-down
+LST
 Supercrop
-Scrog net
+SCROG
 Stake support
 Bud stacking
 Popcorn buds
@@ -111,32 +132,31 @@ Larf cleanup
 Calyx swell
 Pistils orange
 Pistils white
-Trichomes clear
-Trichomes cloudy
-Trichomes amber
+
 Loupe check
 Scope pics
 Bananas spotted
 Nanner panic
 Herm confirmed
 Seed found
+
 Bud wash
 Dry trim
 Wet trim
 Jar burp
 Grove bags
 Hay smell
-Terp explosion
+Terp pop
 Odor control
-Carbon filter swap
+Carbon swap
+
 IPM spray
 Neem debate
 Spinosad talk
 Predator mites
-Ladybugs released
-Chlorosis spreading
-Overfed tips
-Sugar leaf curl`;
+Ladybugs released`;
+
+// ---------- existing code below (unchanged) ----------
 
 function normalizeLines(text: string): string[] {
   return text
@@ -827,4 +847,4 @@ export default function Page() {
       ) : null}
     </div>
   );
-}
+              }
