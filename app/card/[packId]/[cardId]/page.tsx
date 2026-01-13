@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { ICON_MAP } from "@/lib/iconMap";
 
 type BingoCard = {
   id: string;
@@ -162,7 +163,7 @@ export default function CardPage({
   const sponsorName = pack?.sponsorName || "Joe’s Grows";
   const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
 
-  // Background image you uploaded
+  // Background image
   const bgUrl = "/banners/bud-light.png";
 
   const size = card?.grid?.length || 5;
@@ -210,16 +211,16 @@ export default function CardPage({
       }}
     >
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        {/* Banner: NO white box, banner sits directly on background */}
+        {/* Banner (no white box; just crop into shape) */}
         <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
           <div
             style={{
-              width: "min(640px, 92vw)",
-              aspectRatio: "3.6 / 1", // tweak if needed (3.4–3.9)
+              width: "min(680px, 94vw)",
+              aspectRatio: "3.6 / 1",
               overflow: "hidden",
-              borderRadius: 16,
-              boxShadow: "0 12px 34px rgba(0,0,0,0.35)",
+              borderRadius: 18,
               position: "relative",
+              boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
             }}
           >
             <img
@@ -230,7 +231,7 @@ export default function CardPage({
                 inset: 0,
                 width: "100%",
                 height: "100%",
-                objectFit: "cover", // trims top/bottom whitespace
+                objectFit: "cover",
                 objectPosition: "center",
                 display: "block",
               }}
@@ -238,7 +239,7 @@ export default function CardPage({
           </div>
         </div>
 
-        {/* Title text directly on background (no translucent panel) */}
+        {/* Title */}
         <div style={{ marginTop: 14 }}>
           <div
             style={{
@@ -276,7 +277,7 @@ export default function CardPage({
           </button>
         </div>
 
-        {/* Grid: plain black squares over background */}
+        {/* Grid */}
         <div style={{ marginTop: 16 }}>
           <div
             style={{
@@ -292,6 +293,8 @@ export default function CardPage({
               row.map((label, c) => {
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
+
+                const iconSrc = ICON_MAP[label];
 
                 return (
                   <button
@@ -313,17 +316,60 @@ export default function CardPage({
                       flexDirection: "column",
                       alignItems: "center",
                       justifyContent: "center",
+                      position: "relative",
+                      overflow: "hidden",
                       wordBreak: "break-word",
                       boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
                       cursor: "pointer",
                     }}
                   >
-                    {label}
-                    {isCenter && (
-                      <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>
-                        FREE
-                      </div>
+                    {/* ICON watermark layer */}
+                    {iconSrc && !isCenter && (
+                      <img
+                        src={iconSrc}
+                        alt=""
+                        aria-hidden="true"
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                          opacity: 0.28,
+                          transform: "scale(1.03)",
+                          pointerEvents: "none",
+                        }}
+                      />
                     )}
+
+                    {/* readability overlay */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        background:
+                          "linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0.65))",
+                        pointerEvents: "none",
+                      }}
+                    />
+
+                    {/* TEXT proof layer */}
+                    <div
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        padding: "0 6px",
+                        fontSize: 14,
+                        textShadow: "0 2px 10px rgba(0,0,0,0.85)",
+                      }}
+                    >
+                      {label}
+                      {isCenter && (
+                        <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>
+                          FREE
+                        </div>
+                      )}
+                    </div>
                   </button>
                 );
               })
