@@ -1,11 +1,3 @@
-// app/card/[packId]/[cardId]/page.tsx
-"use client";
-
-import React, { useEffect, useMemo, useState } from "react";
-
-type BingoCard = {
-  id: string;
-  grid: string[][];// app/card/[packId]/[cardId]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
