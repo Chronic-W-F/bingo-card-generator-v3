@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { ICON_MAP } from "@/lib/iconMap";
+import { getIconForLabel } from "@/lib/iconMap";
 
 type BingoCard = {
   id: string;
@@ -78,11 +78,6 @@ function saveMarks(packId: string, cardId: string, marks: Record<string, boolean
 
 function cellKey(r: number, c: number) {
   return `${r}_${c}`;
-}
-
-// ✅ Normalize label so ICON_MAP works even if pool text has extra spaces/newlines
-function normalizeIconKey(label: string) {
-  return (label || "").trim().replace(/\s+/g, " ");
 }
 
 export default function CardPage({
@@ -292,9 +287,7 @@ export default function CardPage({
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
 
-                // ✅ FIX: normalize before lookup
-                const iconKey = normalizeIconKey(label);
-                const iconSrc = ICON_MAP[iconKey];
+                const iconSrc = getIconForLabel(label);
 
                 return (
                   <button
