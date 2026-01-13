@@ -156,7 +156,7 @@ export default function CardPage({
   const sponsorName = pack?.sponsorName || "Joe’s Grows";
   const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
 
-  // Your uploaded image
+  // Background image you uploaded
   const bgUrl = "/banners/bud-light.png";
 
   const size = card?.grid?.length || 5;
@@ -201,63 +201,68 @@ export default function CardPage({
         fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
       }}
     >
-      {/* No big translucent panel anymore — just a centered content column */}
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        {/* Banner stays like a “white card” */}
+        {/* Banner: NO translucent container, just a tight white frame */}
         <div
           style={{
-            borderRadius: 22,
-            overflow: "hidden",
-            background: "rgba(255,255,255,0.82)",
-            border: "1px solid rgba(255,255,255,0.6)",
-            boxShadow: "0 14px 44px rgba(0,0,0,0.22)",
-            backdropFilter: "blur(3px)",
-            padding: 12,
+            display: "flex",
+            justifyContent: "center",
+            marginTop: 6,
           }}
         >
-          <img
-            src={bannerUrl}
-            alt="Weekly banner"
-            style={{
-              width: "100%",
-              height: "clamp(110px, 22vw, 170px)",
-              objectFit: "contain",
-              display: "block",
-            }}
-          />
-        </div>
-
-        {/* Title area: use small “white plates” behind text instead of one big panel */}
-        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start" }}>
           <div
             style={{
-              background: "rgba(255,255,255,0.78)",
-              border: "1px solid rgba(255,255,255,0.55)",
+              background: "#fff",
+              padding: 8, // tight “mat”
               borderRadius: 18,
-              padding: "12px 14px",
-              backdropFilter: "blur(3px)",
-              boxShadow: "0 10px 34px rgba(0,0,0,0.18)",
-              flex: "1 1 280px",
-              minWidth: 260,
+              boxShadow: "0 14px 40px rgba(0,0,0,0.28)",
             }}
           >
-            <h1 style={{ margin: "0 0 6px 0", fontSize: 40, lineHeight: 1.05 }}>{title}</h1>
-            <div style={{ fontSize: 18 }}>Sponsor: {sponsorName}</div>
-            <div style={{ fontSize: 18 }}>
-              Card ID: <b>{card.id}</b>
+            <img
+              src={bannerUrl}
+              alt="Weekly banner"
+              style={{
+                display: "block",
+                width: "min(640px, 92vw)",
+                height: "auto",
+                borderRadius: 12,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Title text directly on background (no translucent panel) */}
+        <div style={{ marginTop: 14 }}>
+          <div
+            style={{
+              color: "white",
+              textShadow: "0 4px 14px rgba(0,0,0,0.85)",
+            }}
+          >
+            <h1 style={{ margin: "0 0 6px 0", fontSize: 44, lineHeight: 1.05 }}>
+              {title}
+            </h1>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              Sponsor: {sponsorName}
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              Card ID: <span style={{ fontWeight: 900 }}>{card.id}</span>
             </div>
           </div>
 
+          {/* Clear button, simple */}
           <button
             onClick={clearMarks}
             style={{
-              background: "rgba(255,255,255,0.84)",
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 14,
               border: "1px solid rgba(255,255,255,0.55)",
-              borderRadius: 16,
-              padding: "12px 14px",
+              background: "rgba(0,0,0,0.55)",
+              color: "white",
               fontWeight: 800,
-              backdropFilter: "blur(3px)",
-              boxShadow: "0 10px 34px rgba(0,0,0,0.18)",
+              textShadow: "0 2px 10px rgba(0,0,0,0.8)",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
               cursor: "pointer",
             }}
           >
@@ -265,8 +270,8 @@ export default function CardPage({
           </button>
         </div>
 
-        {/* Grid — each cell has a white “frame” like the banner */}
-        <div style={{ marginTop: 14 }}>
+        {/* Grid: plain black squares over background */}
+        <div style={{ marginTop: 16 }}>
           <div
             style={{
               display: "grid",
@@ -282,55 +287,31 @@ export default function CardPage({
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
 
-                // Outer white “frame” (barely bigger than the inner dark square)
-                const frameStyle: React.CSSProperties = {
-                  borderRadius: 22,
-                  padding: 5,
-                  background: "rgba(255,255,255,0.82)",
-                  border: "1px solid rgba(255,255,255,0.55)",
-                  boxShadow: "0 10px 32px rgba(0,0,0,0.18)",
-                  backdropFilter: "blur(2px)",
-                };
-
-                // Inner square
-                const innerStyle: React.CSSProperties = {
-                  width: "100%",
-                  aspectRatio: "1 / 1",
-                  borderRadius: 18,
-                  border: marked ? "2px solid #10b981" : "1px solid rgba(255,255,255,0.12)",
-                  background: marked ? "#065f46" : "rgba(0,0,0,0.84)",
-                  color: "white",
-                  fontWeight: 800,
-                  padding: 10,
-                  lineHeight: 1.12,
-                  textAlign: "center",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  wordBreak: "break-word",
-                };
-
                 return (
                   <button
                     key={`${r}-${c}`}
                     onClick={() => toggleMark(r, c)}
                     style={{
-                      ...frameStyle,
-                      border: "none",
+                      aspectRatio: "1 / 1",
+                      borderRadius: 18,
+                      border: marked ? "2px solid #10b981" : "1px solid rgba(255,255,255,0.18)",
+                      background: marked ? "#065f46" : "rgba(0,0,0,0.82)",
+                      color: "white",
+                      fontWeight: 850,
+                      padding: 10,
+                      lineHeight: 1.12,
+                      textAlign: "center",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      wordBreak: "break-word",
+                      boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
                       cursor: "pointer",
                     }}
                   >
-                    <div style={innerStyle}>
-                      {/* Optional micro “label plate” behind text:
-                          If you want MORE background showing through the square itself, uncomment this and
-                          set inner background slightly lower. Right now it’s not needed. */}
-                      {/* <div style={{ background:"rgba(255,255,255,0.10)", padding:"6px 8px", borderRadius:12 }}> */}
-                      {label}
-                      {/* </div> */}
-
-                      {isCenter && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>FREE</div>}
-                    </div>
+                    {label}
+                    {isCenter && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>FREE</div>}
                   </button>
                 );
               })
