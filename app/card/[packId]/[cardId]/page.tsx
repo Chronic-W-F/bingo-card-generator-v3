@@ -1,4 +1,3 @@
-// app/card/[packId]/[cardId]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -80,11 +79,6 @@ function cellKey(r: number, c: number) {
   return `${r}_${c}`;
 }
 
-// For debug label display only (matches iconMap normalization style)
-function normalizeLabelForDebug(label: string) {
-  return (label || "").trim().replace(/\s+/g, " ");
-}
-
 export default function CardPage({
   params,
 }: {
@@ -163,7 +157,7 @@ export default function CardPage({
   const sponsorName = pack?.sponsorName || "Joe’s Grows";
   const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
 
-  // Background image (put this file in: /public/banners/bud-light.png)
+  // Background image (put the actual file at: public/banners/bud-light.png)
   const bgUrl = "/banners/bud-light.png";
 
   const size = card?.grid?.length || 5;
@@ -221,7 +215,7 @@ export default function CardPage({
               borderRadius: 18,
               position: "relative",
               boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
-              background: "rgba(0,0,0,0.18)",
+              background: "rgba(0,0,0,0.35)",
             }}
           >
             <img
@@ -232,7 +226,7 @@ export default function CardPage({
                 inset: 0,
                 width: "100%",
                 height: "100%",
-                objectFit: "contain", // shows full banner, no crop
+                objectFit: "contain", // matches your locked decision: no cropping
                 objectPosition: "center",
                 display: "block",
               }}
@@ -242,12 +236,7 @@ export default function CardPage({
 
         {/* Title */}
         <div style={{ marginTop: 14 }}>
-          <div
-            style={{
-              color: "white",
-              textShadow: "0 4px 14px rgba(0,0,0,0.85)",
-            }}
-          >
+          <div style={{ color: "white", textShadow: "0 4px 14px rgba(0,0,0,0.85)" }}>
             <h1 style={{ margin: "0 0 6px 0", fontSize: 44, lineHeight: 1.05 }}>
               {title}
             </h1>
@@ -293,7 +282,7 @@ export default function CardPage({
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
 
-                // ✅ Use the helper (handles weird spacing + case)
+                // ✅ Use helper (handles spacing, smart apostrophes, case)
                 const iconSrc = !isCenter ? getIconForLabel(label) : undefined;
 
                 return (
@@ -323,7 +312,7 @@ export default function CardPage({
                       cursor: "pointer",
                     }}
                   >
-                    {/* ICON watermark layer */}
+                    {/* Icon watermark */}
                     {iconSrc && (
                       <img
                         src={iconSrc}
@@ -353,7 +342,7 @@ export default function CardPage({
                       }}
                     />
 
-                    {/* TEXT proof layer */}
+                    {/* ✅ ONLY ONE LABEL (removes the “doubled up” look) */}
                     <div
                       style={{
                         position: "relative",
@@ -369,23 +358,6 @@ export default function CardPage({
                           FREE
                         </div>
                       )}
-                    </div>
-
-                    {/* TEMP DEBUG (remove later): shows normalized label + icon status */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        bottom: 6,
-                        left: 8,
-                        right: 8,
-                        fontSize: 10,
-                        opacity: 0.75,
-                        zIndex: 2,
-                        pointerEvents: "none",
-                        textShadow: "0 2px 8px rgba(0,0,0,0.9)",
-                      }}
-                    >
-                      {normalizeLabelForDebug(label)} | {iconSrc ? "ICON ✅" : "NO ICON ❌"}
                     </div>
                   </button>
                 );
