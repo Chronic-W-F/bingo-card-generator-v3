@@ -210,42 +210,31 @@ export default function CardPage({
       }}
     >
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        {/* Banner: tight white frame + crop top/bottom whitespace */}
+        {/* Banner: NO white box, banner sits directly on background */}
         <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
           <div
             style={{
-              background: "#fff",
-              padding: 1, // frame thickness
-              borderRadius: 14,
-              boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
-              display: "inline-block",
+              width: "min(640px, 92vw)",
+              aspectRatio: "3.6 / 1", // tweak if needed (3.4–3.9)
+              overflow: "hidden",
+              borderRadius: 16,
+              boxShadow: "0 12px 34px rgba(0,0,0,0.35)",
+              position: "relative",
             }}
           >
-            {/* This inner viewport is what crops the image */}
-            <div
+            <img
+              src={bannerUrl}
+              alt="Weekly banner"
               style={{
-                width: "min(640px, 92vw)",
-                aspectRatio: "3.6 / 1", // ✅ tweak this if needed (3.4–3.9)
-                overflow: "hidden",
-                borderRadius: 12,
-                position: "relative",
-                background: "#fff",
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "cover", // trims top/bottom whitespace
+                objectPosition: "center",
+                display: "block",
               }}
-            >
-              <img
-                src={bannerUrl}
-                alt="Weekly banner"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover", // ✅ trims top/bottom whitespace
-                  objectPosition: "center",
-                  display: "block",
-                }}
-              />
-            </div>
+            />
           </div>
         </div>
 
