@@ -13,7 +13,6 @@ type CardsPack = {
   title?: string;
   sponsorName?: string;
   bannerImageUrl?: string;
-  sponsorLogoUrl?: string;
   cards: BingoCard[];
 };
 
@@ -62,9 +61,7 @@ function marksKey(packId: string, cardId: string) {
 function loadMarks(packId: string, cardId: string): Record<string, boolean> {
   try {
     const raw = window.localStorage.getItem(marksKey(packId, cardId));
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, boolean>;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
   }
@@ -76,7 +73,10 @@ function saveMarks(
   marks: Record<string, boolean>
 ) {
   try {
-    window.localStorage.setItem(marksKey(packId, cardId), JSON.stringify(marks));
+    window.localStorage.setItem(
+      marksKey(packId, cardId),
+      JSON.stringify(marks)
+    );
   } catch {}
 }
 
@@ -89,14 +89,13 @@ export default function CardPage({
 }: {
   params: { packId: string; cardId: string };
 }) {
-  const packId = String(params.packId || "").trim();
-  const cardId = String(params.cardId || "").trim();
+  const packId = String(params.packId || "");
+  const cardId = String(params.cardId || "");
 
   const [pack, setPack] = useState<CardsPack | null>(null);
   const [card, setCard] = useState<BingoCard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [marks, setMarks] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!packId || !cardId) return;
@@ -106,76 +105,46 @@ export default function CardPage({
   useEffect(() => {
     let cancelled = false;
 
-    async function run() {
+    async function load() {
       setLoading(true);
-      setError("");
-
-      if (!packId || !cardId) {
-        setError("Missing packId or cardId.");
-        setLoading(false);
-        return;
-      }
 
       const local = loadPackFromLocalStorage(packId);
-      if (local) {
-        const found = local.cards.find((c) => c.id === cardId) || null;
-        if (!cancelled) {
-          setPack(local);
-          setCard(found);
-        }
+      if (local && !cancelled) {
+        setPack(local);
+        setCard(local.cards.find((c) => c.id === cardId) || null);
       }
 
       const remote = await fetchPackFromApi(packId);
-      if (cancelled) return;
-
-      if (!remote) {
-        setError("Could not load this pack.");
-        setPack(null);
-        setCard(null);
-        setLoading(false);
-        return;
-      }
+      if (!remote || cancelled) return;
 
       savePackToLocalStorage(packId, remote);
-
-      const found = remote.cards.find((c) => c.id === cardId) || null;
-      if (!found) {
-        setError("Card not found in this pack.");
-        setPack(remote);
-        setCard(null);
-        setLoading(false);
-        return;
-      }
-
       setPack(remote);
-      setCard(found);
+      setCard(remote.cards.find((c) => c.id === cardId) || null);
       setLoading(false);
     }
 
-    run();
+    load();
     return () => {
       cancelled = true;
     };
   }, [packId, cardId]);
 
-  const title = pack?.title || "Harvest Heroes Bingo";
-  const sponsorName = pack?.sponsorName || "Joe’s Grows";
-  const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
+  if (loading || !pack || !card) {
+    return <div style={{ padding: 16 }}>Loading card…</div>;
+  }
 
-  // Background image you uploaded
+  const title = pack.title || "Harvest Heroes Bingo";
+  const sponsorName = pack.sponsorName || "Joe’s Grows";
+  const bannerUrl = pack.bannerImageUrl || "/banners/current.png";
   const bgUrl = "/banners/bud-light.png";
 
-  const size = card?.grid?.length || 5;
+  const size = card.grid.length;
   const center = Math.floor(size / 2);
-
-  const grid = useMemo(() => {
-    return card?.grid || Array.from({ length: 5 }, () => Array(5).fill(""));
-  }, [card]);
+  const grid = useMemo(() => card.grid, [card]);
 
   function toggleMark(r: number, c: number) {
     if (r === center && c === center) return;
     const k = cellKey(r, c);
-
     setMarks((prev) => {
       const next = { ...prev, [k]: !prev[k] };
       saveMarks(packId, cardId, next);
@@ -183,19 +152,15 @@ export default function CardPage({
     });
   }
 
-  function clearMarks() {
-    setMarks({});
-    saveMarks(packId, cardId, {});
-  }
-
   function isMarked(r: number, c: number) {
     if (r === center && c === center) return true;
     return !!marks[cellKey(r, c)];
   }
 
-  if (loading) return <div style={{ padding: 16 }}>Loading card…</div>;
-  if (error || !pack || !card)
-    return <div style={{ padding: 16 }}>{error || "Error loading card."}</div>;
+  function clearMarks() {
+    setMarks({});
+    saveMarks(packId, cardId, {});
+  }
 
   return (
     <div
@@ -204,142 +169,110 @@ export default function CardPage({
         backgroundImage: `url(${bgUrl})`,
         backgroundSize: "cover",
         backgroundPosition: "center",
-        backgroundAttachment: "fixed",
-        padding: 12,
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+        padding: 14,
       }}
     >
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        {/* Banner: tight white frame + crop top/bottom whitespace */}
+        {/* Banner – NO white box */}
         <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
           <div
             style={{
-              background: "#fff",
-              padding: 1, // frame thickness
-              borderRadius: 14,
-              boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
-              display: "inline-block",
+              width: "min(640px, 92vw)",
+              aspectRatio: "3.6 / 1",
+              overflow: "hidden",
+              borderRadius: 16,
+              boxShadow: "0 12px 34px rgba(0,0,0,0.35)",
             }}
           >
-            {/* This inner viewport is what crops the image */}
-            <div
+            <img
+              src={bannerUrl}
+              alt="Joe’s Grows banner"
               style={{
-                width: "min(640px, 92vw)",
-                aspectRatio: "3.6 / 1", // ✅ tweak this if needed (3.4–3.9)
-                overflow: "hidden",
-                borderRadius: 12,
-                position: "relative",
-                background: "#fff",
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                display: "block",
               }}
-            >
-              <img
-                src={bannerUrl}
-                alt="Weekly banner"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover", // ✅ trims top/bottom whitespace
-                  objectPosition: "center",
-                  display: "block",
-                }}
-              />
-            </div>
+            />
           </div>
         </div>
 
-        {/* Title text directly on background (no translucent panel) */}
-        <div style={{ marginTop: 14 }}>
-          <div
-            style={{
-              color: "white",
-              textShadow: "0 4px 14px rgba(0,0,0,0.85)",
-            }}
-          >
-            <h1 style={{ margin: "0 0 6px 0", fontSize: 44, lineHeight: 1.05 }}>
-              {title}
-            </h1>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
-              Sponsor: {sponsorName}
-            </div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
-              Card ID: <span style={{ fontWeight: 900 }}>{card.id}</span>
-            </div>
+        {/* Title */}
+        <div
+          style={{
+            marginTop: 14,
+            color: "#fff",
+            textShadow: "0 4px 14px rgba(0,0,0,0.85)",
+          }}
+        >
+          <h1 style={{ margin: "0 0 6px 0", fontSize: 44 }}>
+            {title}
+          </h1>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>
+            Sponsor: {sponsorName}
           </div>
-
-          <button
-            onClick={clearMarks}
-            style={{
-              marginTop: 12,
-              padding: "10px 14px",
-              borderRadius: 14,
-              border: "1px solid rgba(255,255,255,0.55)",
-              background: "rgba(0,0,0,0.55)",
-              color: "white",
-              fontWeight: 800,
-              textShadow: "0 2px 10px rgba(0,0,0,0.8)",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-              cursor: "pointer",
-            }}
-          >
-            Clear marks
-          </button>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>
+            Card ID: <b>{card.id}</b>
+          </div>
         </div>
 
-        {/* Grid: plain black squares over background */}
-        <div style={{ marginTop: 16 }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
-              gap: 10,
-              width: "100%",
-              maxWidth: 760,
-              margin: "0 auto",
-            }}
-          >
-            {grid.map((row, r) =>
-              row.map((label, c) => {
-                const marked = isMarked(r, c);
-                const isCenter = r === center && c === center;
+        <button
+          onClick={clearMarks}
+          style={{
+            marginTop: 12,
+            padding: "10px 14px",
+            borderRadius: 14,
+            background: "rgba(0,0,0,0.55)",
+            color: "#fff",
+            fontWeight: 800,
+            border: "1px solid rgba(255,255,255,0.45)",
+            cursor: "pointer",
+          }}
+        >
+          Clear marks
+        </button>
 
-                return (
-                  <button
-                    key={`${r}-${c}`}
-                    onClick={() => toggleMark(r, c)}
-                    style={{
-                      aspectRatio: "1 / 1",
-                      borderRadius: 18,
-                      border: marked
-                        ? "2px solid #10b981"
-                        : "1px solid rgba(255,255,255,0.18)",
-                      background: marked ? "#065f46" : "rgba(0,0,0,0.82)",
-                      color: "white",
-                      fontWeight: 850,
-                      padding: 10,
-                      lineHeight: 1.12,
-                      textAlign: "center",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      wordBreak: "break-word",
-                      boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {label}
-                    {isCenter && (
-                      <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>
-                        FREE
-                      </div>
-                    )}
-                  </button>
-                );
-              })
-            )}
-          </div>
+        {/* Grid */}
+        <div
+          style={{
+            marginTop: 16,
+            display: "grid",
+            gridTemplateColumns: `repeat(${size}, 1fr)`,
+            gap: 10,
+          }}
+        >
+          {grid.map((row, r) =>
+            row.map((label, c) => {
+              const marked = isMarked(r, c);
+              const isCenter = r === center && c === center;
+
+              return (
+                <button
+                  key={`${r}-${c}`}
+                  onClick={() => toggleMark(r, c)}
+                  style={{
+                    aspectRatio: "1 / 1",
+                    borderRadius: 18,
+                    background: marked
+                      ? "#065f46"
+                      : "rgba(0,0,0,0.82)",
+                    color: "#fff",
+                    fontWeight: 800,
+                    border: marked
+                      ? "2px solid #10b981"
+                      : "1px solid rgba(255,255,255,0.25)",
+                  }}
+                >
+                  {label}
+                  {isCenter && (
+                    <div style={{ fontSize: 12, marginTop: 6 }}>
+                      FREE
+                    </div>
+                  )}
+                </button>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
