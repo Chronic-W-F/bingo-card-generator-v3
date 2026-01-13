@@ -13,6 +13,7 @@ type CardsPack = {
   title?: string;
   sponsorName?: string;
   bannerImageUrl?: string;
+  sponsorLogoUrl?: string;
   cards: BingoCard[];
 };
 
@@ -161,6 +162,7 @@ export default function CardPage({
   const sponsorName = pack?.sponsorName || "Joe’s Grows";
   const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
 
+  // Background image you uploaded
   const bgUrl = "/banners/bud-light.png";
 
   const size = card?.grid?.length || 5;
@@ -208,69 +210,85 @@ export default function CardPage({
       }}
     >
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        {/* Banner: tight white frame */}
+        {/* Banner: tight white frame + crop top/bottom whitespace */}
         <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
           <div
             style={{
               background: "#fff",
-              padding: 1, // ✅ barely outside image
+              padding: 1, // frame thickness
               borderRadius: 14,
               boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
               display: "inline-block",
-              lineHeight: 0, // ✅ kills any stray whitespace gap
             }}
           >
-            <img
-              src={bannerUrl}
-              alt="Weekly banner"
+            {/* This inner viewport is what crops the image */}
+            <div
               style={{
-                display: "block",
                 width: "min(640px, 92vw)",
-                height: "auto",        // ✅ no forced extra height
+                aspectRatio: "3.6 / 1", // ✅ tweak this if needed (3.4–3.9)
+                overflow: "hidden",
                 borderRadius: 12,
+                position: "relative",
+                background: "#fff",
               }}
-            />
+            >
+              <img
+                src={bannerUrl}
+                alt="Weekly banner"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover", // ✅ trims top/bottom whitespace
+                  objectPosition: "center",
+                  display: "block",
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div
-          style={{
-            marginTop: 14,
-            color: "white",
-            textShadow: "0 4px 14px rgba(0,0,0,0.85)",
-          }}
-        >
-          <h1 style={{ margin: "0 0 6px 0", fontSize: 44, lineHeight: 1.05 }}>
-            {title}
-          </h1>
-          <div style={{ fontSize: 18, fontWeight: 700 }}>
-            Sponsor: {sponsorName}
+        {/* Title text directly on background (no translucent panel) */}
+        <div style={{ marginTop: 14 }}>
+          <div
+            style={{
+              color: "white",
+              textShadow: "0 4px 14px rgba(0,0,0,0.85)",
+            }}
+          >
+            <h1 style={{ margin: "0 0 6px 0", fontSize: 44, lineHeight: 1.05 }}>
+              {title}
+            </h1>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              Sponsor: {sponsorName}
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              Card ID: <span style={{ fontWeight: 900 }}>{card.id}</span>
+            </div>
           </div>
-          <div style={{ fontSize: 18, fontWeight: 700 }}>
-            Card ID: <span style={{ fontWeight: 900 }}>{card.id}</span>
-          </div>
+
+          <button
+            onClick={clearMarks}
+            style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 14,
+              border: "1px solid rgba(255,255,255,0.55)",
+              background: "rgba(0,0,0,0.55)",
+              color: "white",
+              fontWeight: 800,
+              textShadow: "0 2px 10px rgba(0,0,0,0.8)",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+              cursor: "pointer",
+            }}
+          >
+            Clear marks
+          </button>
         </div>
 
-        <button
-          onClick={clearMarks}
-          style={{
-            marginTop: 12,
-            marginBottom: 14,
-            padding: "10px 14px",
-            borderRadius: 14,
-            border: "1px solid rgba(255,255,255,0.55)",
-            background: "rgba(0,0,0,0.55)",
-            color: "white",
-            fontWeight: 800,
-            textShadow: "0 2px 10px rgba(0,0,0,0.8)",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-            cursor: "pointer",
-          }}
-        >
-          Clear marks
-        </button>
-
-        <div style={{ marginTop: 6 }}>
+        {/* Grid: plain black squares over background */}
+        <div style={{ marginTop: 16 }}>
           <div
             style={{
               display: "grid",
