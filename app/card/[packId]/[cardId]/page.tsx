@@ -208,7 +208,7 @@ export default function CardPage({
       }}
     >
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        {/* Banner: tight white frame */}
+        {/* Banner: tight white frame that hugs TOP/BOTTOM too */}
         <div
           style={{
             display: "flex",
@@ -220,9 +220,10 @@ export default function CardPage({
           <div
             style={{
               background: "#fff",
-              padding: 1, // barely outside the banner
+              padding: 1, // barely outside banner
               borderRadius: 14,
               boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
+              display: "inline-block",
             }}
           >
             <img
@@ -231,7 +232,8 @@ export default function CardPage({
               style={{
                 display: "block",
                 width: "min(640px, 92vw)",
-                height: "auto",
+                height: 150,          // ✅ controls top/bottom whitespace
+                objectFit: "contain", // ✅ no cropping, banner stays whole
                 borderRadius: 12,
               }}
             />
