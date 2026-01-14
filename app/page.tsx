@@ -26,6 +26,8 @@ const LAST_GENERATED_PACK_KEY = "grower-bingo:lastGeneratedPack:v1";
 const LAST_PACK_KEY = "grower-bingo:lastPackId:v1";
 
 // Splash
+// NOTE: We no longer use SPLASH_DISMISSED_KEY for behavior.
+// Splash now shows on EVERY open/refresh. Optional skip: ?nosplash=1
 const SPLASH_DISMISSED_KEY = "grower-bingo:splashDismissed:v1";
 const SPLASH_IMAGE_SRC = "/splash/harvest-heroes-bingo.png";
 
@@ -332,22 +334,20 @@ export default function Page() {
   const poolLines = useMemo(() => normalizeLines(itemsText), [itemsText]);
   const poolCount = poolLines.length;
 
-  // Splash: show once unless dismissed; allow forcing with ?splash=1
+  // ✅ Splash: ALWAYS show on open/refresh.
+  // Optional skip: add ?nosplash=1 to the URL.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const force = params.get("splash") === "1";
-      const dismissed = window.localStorage.getItem(SPLASH_DISMISSED_KEY) === "1";
-      setShowSplash(force || !dismissed);
+      const skip = params.get("nosplash") === "1";
+      setShowSplash(!skip);
     } catch {
       setShowSplash(true);
     }
   }, []);
 
   function dismissSplash() {
-    try {
-      window.localStorage.setItem(SPLASH_DISMISSED_KEY, "1");
-    } catch {}
+    // No localStorage write. Splash will show again on next load.
     setShowSplash(false);
     // keep them at the top of the generator UI
     try {
@@ -619,7 +619,7 @@ export default function Page() {
           </button>
 
           <div style={{ marginTop: 10, fontSize: 12, color: "rgba(255,255,255,0.70)" }}>
-            Tip: add <b>?splash=1</b> to the URL any time you want to show this screen again.
+            Tip: add <b>?nosplash=1</b> to the URL if you want to skip this screen.
           </div>
         </div>
       </div>
@@ -1001,4 +1001,4 @@ export default function Page() {
       ) : null}
     </div>
   );
-}
+          }
