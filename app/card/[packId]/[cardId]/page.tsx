@@ -33,9 +33,7 @@ function packStorageKey(packId: string) {
 }
 
 function loadPackFromLocalStorage(packId: string): CardsPack | null {
-  return safeJsonParse<CardsPack>(
-    window.localStorage.getItem(packStorageKey(packId))
-  );
+  return safeJsonParse<CardsPack>(window.localStorage.getItem(packStorageKey(packId)));
 }
 
 function savePackToLocalStorage(packId: string, pack: CardsPack) {
@@ -72,16 +70,9 @@ function loadMarks(packId: string, cardId: string): Record<string, boolean> {
   }
 }
 
-function saveMarks(
-  packId: string,
-  cardId: string,
-  marks: Record<string, boolean>
-) {
+function saveMarks(packId: string, cardId: string, marks: Record<string, boolean>) {
   try {
-    window.localStorage.setItem(
-      marksKey(packId, cardId),
-      JSON.stringify(marks)
-    );
+    window.localStorage.setItem(marksKey(packId, cardId), JSON.stringify(marks));
   } catch {}
 }
 
@@ -116,6 +107,12 @@ export default function CardPage({
       setLoading(true);
       setError("");
 
+      if (!packId || !cardId) {
+        setError("Missing packId or cardId.");
+        setLoading(false);
+        return;
+      }
+
       const local = loadPackFromLocalStorage(packId);
       if (local) {
         const found = local.cards.find((c) => c.id === cardId) || null;
@@ -130,15 +127,19 @@ export default function CardPage({
 
       if (!remote) {
         setError("Could not load this pack.");
+        setPack(null);
+        setCard(null);
         setLoading(false);
         return;
       }
 
       savePackToLocalStorage(packId, remote);
-      const found = remote.cards.find((c) => c.id === cardId) || null;
 
+      const found = remote.cards.find((c) => c.id === cardId) || null;
       if (!found) {
         setError("Card not found in this pack.");
+        setPack(remote);
+        setCard(null);
         setLoading(false);
         return;
       }
@@ -169,6 +170,7 @@ export default function CardPage({
   function toggleMark(r: number, c: number) {
     if (r === center && c === center) return;
     const k = cellKey(r, c);
+
     setMarks((prev) => {
       const next = { ...prev, [k]: !prev[k] };
       saveMarks(packId, cardId, next);
@@ -212,6 +214,7 @@ export default function CardPage({
               overflow: "hidden",
               borderRadius: 18,
               position: "relative",
+              boxShadow: "0 12px 34px rgba(0,0,0,0.28)",
               background: "rgba(0,0,0,0.35)",
             }}
           >
@@ -224,6 +227,8 @@ export default function CardPage({
                 width: "100%",
                 height: "100%",
                 objectFit: "contain",
+                objectPosition: "center",
+                display: "block",
               }}
             />
           </div>
@@ -252,6 +257,7 @@ export default function CardPage({
               color: "white",
               fontWeight: 800,
               textShadow: "0 2px 10px rgba(0,0,0,0.8)",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
               cursor: "pointer",
             }}
           >
@@ -266,6 +272,7 @@ export default function CardPage({
               display: "grid",
               gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
               gap: 10,
+              width: "100%",
               maxWidth: 760,
               margin: "0 auto",
             }}
@@ -274,6 +281,7 @@ export default function CardPage({
               row.map((label, c) => {
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
+
                 const iconSrc = !isCenter ? getIconForLabel(label) : undefined;
 
                 return (
@@ -290,19 +298,25 @@ export default function CardPage({
                       color: "white",
                       fontWeight: 850,
                       padding: 10,
+                      lineHeight: 1.12,
+                      textAlign: "center",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       position: "relative",
                       overflow: "hidden",
+                      wordBreak: "normal",
+                      overflowWrap: "normal",
+                      boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
                       cursor: "pointer",
                     }}
                   >
-                    {iconSrc && (
+                    {/* Icon full exposure */}
+                    {iconSrc ? (
                       <img
                         src={iconSrc}
                         alt=""
-                        aria-hidden
+                        aria-hidden="true"
                         style={{
                           position: "absolute",
                           inset: 0,
@@ -314,29 +328,30 @@ export default function CardPage({
                           pointerEvents: "none",
                         }}
                         onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display =
-                            "none";
+                          (e.currentTarget as HTMLImageElement).style.display = "none";
                         }}
                       />
-                    )}
+                    ) : null}
 
+                    {/* Lighter dark overlay so the icon still pops */}
                     <div
                       style={{
                         position: "absolute",
                         inset: 0,
-                        background: "rgba(0,0,0,0.18)",
+                        background: "rgba(0,0,0,0.38)",
                         pointerEvents: "none",
                       }}
                     />
 
+                    {/* Text - UPDATED to avoid portrait clipping */}
                     <div
                       style={{
                         position: "relative",
                         zIndex: 2,
-                        padding: "4px 6px",
-                        fontSize: 13, // ✅ one size smaller than previous (14 -> 13)
-                        lineHeight: 1.0,
+                        padding: "6px 6px", // ✅ more vertical breathing room
+                        fontSize: 13, // ✅ one more size smaller than before
                         fontWeight: 900,
+                        lineHeight: 1.1, // ✅ prevents glyph clipping and 2-line cutoff
                         textAlign: "center",
                         color: "white",
                         textShadow: "0 2px 10px rgba(0,0,0,0.9)",
@@ -344,11 +359,11 @@ export default function CardPage({
                       }}
                     >
                       {label}
-                      {isCenter && (
+                      {isCenter ? (
                         <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>
                           FREE
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </button>
                 );
@@ -400,7 +415,14 @@ export default function CardPage({
               This will remove every checked square on this card. You can’t undo it.
             </div>
 
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                justifyContent: "flex-end",
+                flexWrap: "wrap",
+              }}
+            >
               <button
                 onClick={() => setConfirmClearOpen(false)}
                 style={{
