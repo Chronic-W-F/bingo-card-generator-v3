@@ -229,12 +229,42 @@ export default function CardPage({
           </div>
         </div>
 
+        {/* Title */}
+        <div style={{ marginTop: 14 }}>
+          <div style={{ color: "white", textShadow: "0 4px 14px rgba(0,0,0,0.85)" }}>
+            <h1 style={{ margin: "0 0 6px 0", fontSize: 44, lineHeight: 1.05 }}>
+              {title}
+            </h1>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>Sponsor: {sponsorName}</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              Card ID: <span style={{ fontWeight: 900 }}>{card.id}</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setConfirmClearOpen(true)}
+            style={{
+              marginTop: 12,
+              padding: "10px 14px",
+              borderRadius: 14,
+              border: "1px solid rgba(255,255,255,0.55)",
+              background: "rgba(0,0,0,0.55)",
+              color: "white",
+              fontWeight: 800,
+              textShadow: "0 2px 10px rgba(0,0,0,0.8)",
+              cursor: "pointer",
+            }}
+          >
+            Clear marks
+          </button>
+        </div>
+
         {/* Grid */}
         <div style={{ marginTop: 16 }}>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: `repeat(${size}, 1fr)`,
+              gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
               gap: 10,
               maxWidth: 760,
               margin: "0 auto",
@@ -244,9 +274,7 @@ export default function CardPage({
               row.map((label, c) => {
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
-                const iconSrc = !isCenter
-                  ? getIconForLabel(label)
-                  : undefined;
+                const iconSrc = !isCenter ? getIconForLabel(label) : undefined;
 
                 return (
                   <button
@@ -258,9 +286,7 @@ export default function CardPage({
                       border: marked
                         ? "2px solid #10b981"
                         : "1px solid rgba(255,255,255,0.18)",
-                      background: marked
-                        ? "#065f46"
-                        : "rgba(0,0,0,0.82)",
+                      background: marked ? "#065f46" : "rgba(0,0,0,0.82)",
                       color: "white",
                       fontWeight: 850,
                       padding: 10,
@@ -283,6 +309,7 @@ export default function CardPage({
                           width: "100%",
                           height: "100%",
                           objectFit: "cover",
+                          objectPosition: "center",
                           opacity: 1,
                           pointerEvents: "none",
                         }}
@@ -307,17 +334,18 @@ export default function CardPage({
                         position: "relative",
                         zIndex: 2,
                         padding: "4px 6px",
-                        fontSize: 14, // ✅ slightly smaller text
+                        fontSize: 13, // ✅ one size smaller than previous (14 -> 13)
                         lineHeight: 1.0,
                         fontWeight: 900,
                         textAlign: "center",
-                        textShadow:
-                          "0 2px 10px rgba(0,0,0,0.9)",
+                        color: "white",
+                        textShadow: "0 2px 10px rgba(0,0,0,0.9)",
+                        whiteSpace: "normal",
                       }}
                     >
                       {label}
                       {isCenter && (
-                        <div style={{ fontSize: 12, marginTop: 6 }}>
+                        <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>
                           FREE
                         </div>
                       )}
@@ -329,6 +357,86 @@ export default function CardPage({
           </div>
         </div>
       </div>
+
+      {/* Confirm clear */}
+      {confirmClearOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.60)",
+            display: "grid",
+            placeItems: "center",
+            padding: 16,
+            zIndex: 9999,
+          }}
+          onClick={() => setConfirmClearOpen(false)}
+        >
+          <div
+            style={{
+              width: "min(520px, 100%)",
+              borderRadius: 18,
+              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(10, 14, 12, 0.96)",
+              color: "white",
+              padding: 16,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 8 }}>
+              Clear all marks?
+            </div>
+
+            <div
+              style={{
+                fontSize: 14,
+                color: "rgba(255,255,255,0.80)",
+                marginBottom: 14,
+              }}
+            >
+              This will remove every checked square on this card. You can’t undo it.
+            </div>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setConfirmClearOpen(false)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  background: "transparent",
+                  color: "white",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={() => {
+                  clearMarks();
+                  setConfirmClearOpen(false);
+                }}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  background: "rgba(185, 28, 28, 0.92)",
+                  color: "white",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                Clear marks
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
