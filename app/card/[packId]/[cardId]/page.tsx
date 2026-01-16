@@ -1,3 +1,4 @@
+// app/card/[packId]/[cardId]/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -32,9 +33,7 @@ function packStorageKey(packId: string) {
 }
 
 function loadPackFromLocalStorage(packId: string): CardsPack | null {
-  return safeJsonParse<CardsPack>(
-    window.localStorage.getItem(packStorageKey(packId))
-  );
+  return safeJsonParse<CardsPack>(window.localStorage.getItem(packStorageKey(packId)));
 }
 
 function savePackToLocalStorage(packId: string, pack: CardsPack) {
@@ -71,11 +70,7 @@ function loadMarks(packId: string, cardId: string): Record<string, boolean> {
   }
 }
 
-function saveMarks(
-  packId: string,
-  cardId: string,
-  marks: Record<string, boolean>
-) {
+function saveMarks(packId: string, cardId: string, marks: Record<string, boolean>) {
   try {
     window.localStorage.setItem(marksKey(packId, cardId), JSON.stringify(marks));
   } catch {}
@@ -98,8 +93,6 @@ export default function CardPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [marks, setMarks] = useState<Record<string, boolean>>({});
-
-  // ✅ Confirm-clear modal
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   useEffect(() => {
@@ -165,8 +158,6 @@ export default function CardPage({
   const title = pack?.title || "Harvest Heroes Bingo";
   const sponsorName = pack?.sponsorName || "Joe’s Grows";
   const bannerUrl = pack?.bannerImageUrl || "/banners/current.png";
-
-  // Background image (put the actual file at: public/banners/bud-light.png)
   const bgUrl = "/banners/bud-light.png";
 
   const size = card?.grid?.length || 5;
@@ -190,19 +181,6 @@ export default function CardPage({
   function clearMarks() {
     setMarks({});
     saveMarks(packId, cardId, {});
-  }
-
-  function requestClearMarks() {
-    setConfirmClearOpen(true);
-  }
-
-  function cancelClearMarks() {
-    setConfirmClearOpen(false);
-  }
-
-  function confirmClearMarks() {
-    clearMarks();
-    setConfirmClearOpen(false);
   }
 
   function isMarked(r: number, c: number) {
@@ -248,7 +226,7 @@ export default function CardPage({
                 inset: 0,
                 width: "100%",
                 height: "100%",
-                objectFit: "contain", // matches your locked decision: no cropping
+                objectFit: "contain",
                 objectPosition: "center",
                 display: "block",
               }}
@@ -269,7 +247,7 @@ export default function CardPage({
           </div>
 
           <button
-            onClick={requestClearMarks}
+            onClick={() => setConfirmClearOpen(true)}
             style={{
               marginTop: 12,
               padding: "10px 14px",
@@ -304,7 +282,6 @@ export default function CardPage({
                 const marked = isMarked(r, c);
                 const isCenter = r === center && c === center;
 
-                // ✅ Use helper (handles spacing, smart apostrophes, case)
                 const iconSrc = !isCenter ? getIconForLabel(label) : undefined;
 
                 return (
@@ -324,18 +301,19 @@ export default function CardPage({
                       lineHeight: 1.12,
                       textAlign: "center",
                       display: "flex",
-                      flexDirection: "column",
                       alignItems: "center",
                       justifyContent: "center",
                       position: "relative",
                       overflow: "hidden",
-                      wordBreak: "break-word",
+                      // ✅ CHANGED: prevent those ugly letter breaks like "Aer/atio/n"
+                      wordBreak: "normal",
+                      overflowWrap: "normal",
                       boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
                       cursor: "pointer",
                     }}
                   >
-                    {/* ✅ Icon background (FULL exposure) */}
-                    {iconSrc && (
+                    {/* ✅ CHANGED: icon is FULL exposure (no watermark fade) */}
+                    {iconSrc ? (
                       <img
                         src={iconSrc}
                         alt=""
@@ -346,40 +324,47 @@ export default function CardPage({
                           width: "100%",
                           height: "100%",
                           objectFit: "cover",
-                          opacity: 1, // ✅ full exposure (no watermark)
-                          transform: "scale(1.03)",
+                          objectPosition: "center",
+                          opacity: 1, // FULL exposure
                           pointerEvents: "none",
-                          filter: "none",
+                        }}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = "none";
                         }}
                       />
-                    )}
+                    ) : null}
 
-                    {/* ✅ Light readability overlay (keeps text readable without watermark look) */}
+                    {/* ✅ CHANGED: slightly lighter dark overlay so the icon still pops */}
                     <div
                       style={{
                         position: "absolute",
                         inset: 0,
-                        background: "rgba(0,0,0,0.18)", // ✅ lighter than the old gradient
+                        background: "rgba(0,0,0,0.38)",
                         pointerEvents: "none",
                       }}
                     />
 
-                    {/* ✅ ONLY ONE LABEL (removes the “doubled up” look) */}
+                    {/* ✅ CHANGED: smaller text, wraps by words only */}
                     <div
                       style={{
                         position: "relative",
-                        zIndex: 1,
-                        padding: "0 6px",
-                        fontSize: 13, // slightly smaller for long labels
-                        textShadow: "0 2px 10px rgba(0,0,0,0.85)",
+                        zIndex: 2,
+                        padding: "4px 6px",
+                        fontSize: 15, // smaller than 18
+                        fontWeight: 900,
+                        lineHeight: 1.05,
+                        textAlign: "center",
+                        color: "white",
+                        textShadow: "0 2px 10px rgba(0,0,0,0.9)",
+                        whiteSpace: "normal",
                       }}
                     >
                       {label}
-                      {isCenter && (
+                      {isCenter ? (
                         <div style={{ fontSize: 12, marginTop: 6, opacity: 0.95 }}>
                           FREE
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </button>
                 );
@@ -389,7 +374,7 @@ export default function CardPage({
         </div>
       </div>
 
-      {/* ✅ Stylized Confirm Clear Modal */}
+      {/* Confirm clear */}
       {confirmClearOpen ? (
         <div
           role="dialog"
@@ -403,7 +388,7 @@ export default function CardPage({
             padding: 16,
             zIndex: 9999,
           }}
-          onClick={cancelClearMarks}
+          onClick={() => setConfirmClearOpen(false)}
         >
           <div
             style={{
@@ -440,7 +425,7 @@ export default function CardPage({
               }}
             >
               <button
-                onClick={cancelClearMarks}
+                onClick={() => setConfirmClearOpen(false)}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 12,
@@ -455,7 +440,10 @@ export default function CardPage({
               </button>
 
               <button
-                onClick={confirmClearMarks}
+                onClick={() => {
+                  clearMarks();
+                  setConfirmClearOpen(false);
+                }}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 12,
