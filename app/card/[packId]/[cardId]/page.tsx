@@ -32,7 +32,9 @@ function packStorageKey(packId: string) {
 }
 
 function loadPackFromLocalStorage(packId: string): CardsPack | null {
-  return safeJsonParse<CardsPack>(window.localStorage.getItem(packStorageKey(packId)));
+  return safeJsonParse<CardsPack>(
+    window.localStorage.getItem(packStorageKey(packId))
+  );
 }
 
 function savePackToLocalStorage(packId: string, pack: CardsPack) {
@@ -69,7 +71,11 @@ function loadMarks(packId: string, cardId: string): Record<string, boolean> {
   }
 }
 
-function saveMarks(packId: string, cardId: string, marks: Record<string, boolean>) {
+function saveMarks(
+  packId: string,
+  cardId: string,
+  marks: Record<string, boolean>
+) {
   try {
     window.localStorage.setItem(marksKey(packId, cardId), JSON.stringify(marks));
   } catch {}
@@ -328,7 +334,7 @@ export default function CardPage({
                       cursor: "pointer",
                     }}
                   >
-                    {/* Icon watermark */}
+                    {/* ✅ Icon background (FULL exposure) */}
                     {iconSrc && (
                       <img
                         src={iconSrc}
@@ -340,20 +346,20 @@ export default function CardPage({
                           width: "100%",
                           height: "100%",
                           objectFit: "cover",
-                          opacity: 0.28,
+                          opacity: 1, // ✅ full exposure (no watermark)
                           transform: "scale(1.03)",
                           pointerEvents: "none",
+                          filter: "none",
                         }}
                       />
                     )}
 
-                    {/* readability overlay */}
+                    {/* ✅ Light readability overlay (keeps text readable without watermark look) */}
                     <div
                       style={{
                         position: "absolute",
                         inset: 0,
-                        background:
-                          "linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0.65))",
+                        background: "rgba(0,0,0,0.18)", // ✅ lighter than the old gradient
                         pointerEvents: "none",
                       }}
                     />
@@ -364,7 +370,7 @@ export default function CardPage({
                         position: "relative",
                         zIndex: 1,
                         padding: "0 6px",
-                        fontSize: 14,
+                        fontSize: 13, // slightly smaller for long labels
                         textShadow: "0 2px 10px rgba(0,0,0,0.85)",
                       }}
                     >
@@ -415,7 +421,13 @@ export default function CardPage({
               Clear all marks?
             </div>
 
-            <div style={{ fontSize: 14, color: "rgba(255,255,255,0.80)", marginBottom: 14 }}>
+            <div
+              style={{
+                fontSize: 14,
+                color: "rgba(255,255,255,0.80)",
+                marginBottom: 14,
+              }}
+            >
               This will remove every checked square on this card. You can’t undo it.
             </div>
 
@@ -462,4 +474,4 @@ export default function CardPage({
       ) : null}
     </div>
   );
-            }
+}
